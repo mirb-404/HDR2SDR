@@ -44,35 +44,46 @@ export default function FlagExplainer() {
 
   return (
     <div className="glass rounded-2xl overflow-hidden">
-      <div className="px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+      <div className="px-4 sm:px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
         <h2 className="font-bold text-base" style={{ color: 'var(--text-primary)' }}>
           What does each flag do?
         </h2>
-        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Click to expand an explanation</p>
+        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          <span className="sm:hidden">Tap a row to expand an explanation</span>
+          <span className="hidden sm:inline">Click to expand an explanation</span>
+        </p>
       </div>
       <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
         {FLAGS.map((f, idx) => (
           <div key={idx}>
             <button
-              className="w-full px-6 py-4 flex items-center gap-3 text-left transition-colors"
-              style={{ background: openIdx === idx ? 'rgba(255,255,255,0.03)' : 'transparent' }}
+              className="w-full px-4 sm:px-6 py-4 flex items-center gap-3 text-left transition-colors"
+              style={{ background: openIdx === idx ? 'rgba(255,255,255,0.03)' : 'transparent', minHeight: '56px' }}
               onClick={() => setOpenIdx(openIdx === idx ? null : idx)}
+              aria-expanded={openIdx === idx}
+              aria-controls={`flag-panel-${idx}`}
             >
               <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: f.color }}></div>
-              <code className="text-xs flex-1 mono" style={{ color: 'var(--accent-light)' }}>{f.flag}</code>
-              <span className="text-sm font-medium flex-1" style={{ color: 'var(--text-secondary)' }}>{f.title}</span>
+              {/* Two flex-1 columns left ~90px each on a phone, so they stack
+                  vertically until there is room for a single row */}
+              <span className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center sm:gap-3">
+                <code className="text-[11px] sm:text-xs mono truncate sm:flex-1" style={{ color: 'var(--accent-light)' }}>{f.flag}</code>
+                <span className="text-sm font-medium sm:flex-1" style={{ color: 'var(--text-secondary)' }}>{f.title}</span>
+              </span>
               <svg
-                width="16" height="16" viewBox="0 0 24 24" fill="none"
+                width="16" height="16" viewBox="0 0 24 24" fill="none" className="flex-shrink-0"
                 style={{ color: 'var(--text-muted)', transform: openIdx === idx ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.25s' }}
               >
                 <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
-            <div className={`accordion-content ${openIdx === idx ? 'open' : ''}`}>
-              <div className="px-6 pb-5">
-                <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)', borderLeft: `3px solid ${f.color}`, paddingLeft: '12px' }}>
-                  {f.desc}
-                </p>
+            <div id={`flag-panel-${idx}`} className={`accordion-content ${openIdx === idx ? 'open' : ''}`}>
+              <div>
+                <div className="px-4 sm:px-6 pb-5">
+                  <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)', borderLeft: `3px solid ${f.color}`, paddingLeft: '12px' }}>
+                    {f.desc}
+                  </p>
+                </div>
               </div>
             </div>
           </div>

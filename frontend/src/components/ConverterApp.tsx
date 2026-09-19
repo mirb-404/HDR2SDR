@@ -114,34 +114,34 @@ export default function ConverterApp() {
   }
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-6 py-12 space-y-8">
+    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6 sm:space-y-8">
       {/* Hero */}
-      <div className="text-center space-y-3 mb-10">
+      <div className="text-center space-y-3 mb-8 sm:mb-10">
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium mb-2"
           style={{ background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', color: 'var(--accent-light)' }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           HDR → BT.709 SDR via libx265
         </div>
-        <h1 className="text-4xl md:text-5xl font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>
           Convert{' '}
           <span style={{ background: 'linear-gradient(135deg, #a78bfa, #60a5fa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
             HDR to SDR
           </span>
         </h1>
-        <p className="text-base max-w-xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
+        <p className="text-sm sm:text-base max-w-xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
           Upload your HDR video, and download a perfectly converted SDR MP4 using our fixed Hable tone-mapping pipeline.
         </p>
       </div>
 
       {/* Step indicator */}
-      <div className="flex items-center justify-center gap-3 mb-4">
+      <div className="flex items-center justify-center gap-1.5 sm:gap-3 mb-4">
         {(['upload', 'options', 'converting', 'done'] as Stage[]).map((s, i) => {
           const labels = ['Upload', 'Configure', 'Converting', 'Done']
           const isActive = stage === s
           const isDone = ['upload', 'options', 'converting', 'done'].indexOf(stage) > i
           return (
-            <div key={s} className="flex items-center gap-2">
-              {i > 0 && <div className="w-8 h-px" style={{ background: isDone || isActive ? 'var(--accent)' : 'var(--border)' }} />}
+            <div key={s} className="flex items-center gap-1.5 sm:gap-2">
+              {i > 0 && <div className="w-4 sm:w-8 h-px" style={{ background: isDone || isActive ? 'var(--accent)' : 'var(--border)' }} />}
               <div className="flex items-center gap-1.5">
                 <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all"
                   style={{
@@ -163,7 +163,7 @@ export default function ConverterApp() {
 
       {/* Main card */}
       <div className="glass rounded-2xl overflow-hidden">
-        <div className="p-6 md:p-8 space-y-6">
+        <div className="p-4 sm:p-6 md:p-8 space-y-6">
 
           {/* Upload step */}
           {(stage === 'upload' || stage === 'options') && (
@@ -174,9 +174,9 @@ export default function ConverterApp() {
           {stage === 'options' && file && (
             <div className="fade-in-up space-y-6">
               <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
-                <div className="flex items-center justify-between mb-5">
-                  <h2 className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>Conversion Options</h2>
-                  <button onClick={reset} className="btn-secondary text-xs py-1.5 px-3">← Start over</button>
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <h2 className="text-sm sm:text-base font-bold" style={{ color: 'var(--text-primary)' }}>Conversion Options</h2>
+                  <button onClick={reset} className="btn-secondary text-xs py-1.5 px-3 flex-shrink-0">← Start over</button>
                 </div>
                 <OptionsPanel inputName={file.name} />
               </div>
@@ -223,7 +223,7 @@ export default function ConverterApp() {
 
           {/* Error */}
           {stage === 'error' && (
-            <div className="rounded-2xl p-6 fade-in-up" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
+            <div className="rounded-2xl p-4 sm:p-6 fade-in-up" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
               <div className="flex items-start gap-3">
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(239,68,68,0.2)' }}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ color: '#ef4444' }}>
@@ -234,7 +234,7 @@ export default function ConverterApp() {
                 </div>
                 <div className="flex-1">
                   <p className="font-bold text-sm" style={{ color: '#ef4444' }}>Conversion Failed</p>
-                  <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>{error}</p>
+                  <p className="text-sm mt-1 break-words" style={{ color: 'var(--text-secondary)' }}>{error}</p>
                   {error.toLowerCase().includes('ffmpeg') && (
                     <p className="text-xs mt-2 px-3 py-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--text-muted)' }}>
                       💡 Make sure FFmpeg is installed and available in your system PATH.

@@ -27,14 +27,14 @@ export default function OptionsPanel({ inputName }: Props) {
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {PIPELINE_STEPS.map(({ flag, label, color }, i) => (
-            <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
+            <div key={i} className="flex items-center gap-2.5 sm:gap-3 px-3 py-2.5 rounded-xl"
               style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)' }}>
               <div className="w-5 h-5 rounded-md flex items-center justify-center text-xs font-black flex-shrink-0"
                 style={{ background: `${color}22`, color, border: `1px solid ${color}44` }}>
                 {i + 1}
               </div>
               <div className="min-w-0">
-                <p className="mono text-xs truncate" style={{ color: 'var(--accent-light)' }}>{flag}</p>
+                <p className="mono text-[11px] sm:text-xs truncate" style={{ color: 'var(--accent-light)' }}>{flag}</p>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{label}</p>
               </div>
             </div>
@@ -61,9 +61,11 @@ export default function OptionsPanel({ inputName }: Props) {
       {/* Full command preview */}
       <div>
         <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Exact Command</p>
-        <div className="rounded-xl p-4 overflow-x-auto"
-          style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid var(--border)' }}>
-          <pre className="mono text-xs leading-6 whitespace-pre" style={{ color: '#a78bfa' }}>
+        {/* Horizontal scroll is the right call for a command — wrapping it would
+            make it uncopyable. -webkit-overflow-scrolling keeps iOS momentum. */}
+        <div className="rounded-xl p-3 sm:p-4 overflow-x-auto"
+          style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid var(--border)', WebkitOverflowScrolling: 'touch' }}>
+          <pre className="mono text-[11px] sm:text-xs leading-6 whitespace-pre" style={{ color: '#a78bfa' }}>
             {FIXED_COMMAND(inputName)}
           </pre>
         </div>

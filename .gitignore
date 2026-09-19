@@ -1,1 +1,8 @@
 node_modules
+
+# Runtime job files
+backend/uploads/
+backend/outputs/
+
+# Build output
+frontend/dist/

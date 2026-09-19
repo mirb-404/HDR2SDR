@@ -29,12 +29,23 @@ body {
   font-family: 'Inter', system-ui, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
+  /* dvh tracks the collapsing mobile URL bar; vh is the fallback for old browsers */
   min-height: 100vh;
+  min-height: 100dvh;
   overflow-x: hidden;
+  /* Stop iOS inflating text when the phone is rotated to landscape */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
+/* Kill the grey flash and the 300ms double-tap-zoom delay on touch devices */
+button, a, [role='button'], label, input, select, textarea {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Custom scrollbar (desktop; mobile uses overlay scrollbars) */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
 ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
 
@@ -55,8 +66,10 @@ body {
   backdrop-filter: blur(12px);
 }
 
-.glass:hover {
-  border-color: rgba(139,92,246,0.2);
+@media (hover: hover) {
+  .glass:hover {
+    border-color: rgba(139,92,246,0.2);
+  }
 }
 
 /* Glow effect */
@@ -87,6 +100,11 @@ body {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
+/* Anything under 16px makes iOS Safari zoom the page in on focus */
+@media (max-width: 640px) {
+  .input-base { font-size: 16px; }
+}
+
 /* Button styles */
 .btn-primary {
   background: linear-gradient(135deg, #7c3aed, #5b21b6);
@@ -94,6 +112,7 @@ body {
   border: none;
   border-radius: 10px;
   padding: 12px 28px;
+  min-height: 44px; /* Apple/Android minimum comfortable touch target */
   font-weight: 600;
   font-size: 0.9rem;
   cursor: pointer;
@@ -104,10 +123,17 @@ body {
   justify-content: center;
 }
 
-.btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
-  transform: translateY(-1px);
-  box-shadow: 0 8px 25px rgba(124,58,237,0.4);
+/* Hover-only styling — on touch screens a tap leaves :hover stuck on */
+@media (hover: hover) {
+  .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 25px rgba(124,58,237,0.4);
+  }
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn-primary:disabled {
@@ -121,18 +147,26 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 20px;
+  min-height: 44px;
   font-weight: 500;
   font-size: 0.875rem;
   cursor: pointer;
   transition: all 0.2s;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 
-.btn-secondary:hover {
-  background: rgba(255,255,255,0.1);
-  color: var(--text-primary);
+@media (hover: hover) {
+  .btn-secondary:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--text-primary);
+  }
+}
+
+.btn-secondary:active {
+  background: rgba(255,255,255,0.12);
 }
 
 /* Range slider */
@@ -158,9 +192,16 @@ input[type='range']::-webkit-slider-thumb {
   transition: all 0.15s;
 }
 
-input[type='range']::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-  box-shadow: 0 0 14px var(--accent-glow);
+@media (hover: hover) {
+  input[type='range']::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 14px var(--accent-glow);
+  }
+}
+
+@media (pointer: coarse) {
+  input[type='range'] { height: 10px; }
+  input[type='range']::-webkit-slider-thumb { width: 26px; height: 26px; }
 }
 
 /* Progress bar */
@@ -192,6 +233,11 @@ input[type='range']::-webkit-slider-thumb:hover {
   transition: all 0.25s;
 }
 
+.drop-zone:active {
+  border-color: var(--accent);
+  background: rgba(124,58,237,0.07);
+}
+
 .drop-zone.dragging {
   border-color: var(--accent);
   background: rgba(124,58,237,0.07);
@@ -218,13 +264,30 @@ input[type='range']::-webkit-slider-thumb:hover {
   animation: fadeInUp 0.5s ease both;
 }
 
-/* Accordion */
+/* Accordion — grid-rows animates to the content's real height, so long
+   explanations never get clipped the way a fixed max-height clips them
+   once the text wraps onto many lines on a narrow phone. */
 .accordion-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.35s ease;
+}
+
+.accordion-content > * {
   overflow: hidden;
-  max-height: 0;
-  transition: max-height 0.35s ease;
+  min-height: 0;
 }
 
 .accordion-content.open {
-  max-height: 600px;
+  grid-template-rows: 1fr;
+}
+
+/* Respect users who ask their phone to cut down on motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -4,10 +4,13 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
+const dgram = require('dgram');
 const { spawn } = require('child_process');
 
 const app = express();
-const PORT = 3001;
+// Bind to 0.0.0.0 so the server is reachable from other devices on the LAN.
+const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(cors());
 app.use(express.json());
@@ -74,7 +77,7 @@ app.post('/api/convert', (req, res) => {
   const args = [
     '-i', inputPath,
     '-vf', 'zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p',
-    '-c:v', 'libx265',
+    '-c:v', 'libx264',
     '-crf', '22',
     '-preset', 'medium',
     '-tune', 'fastdecode',
@@ -194,6 +197,68 @@ app.get('/api/status/:jobId', (req, res) => {
   res.json({ exists: true, done });
 });
 
-app.listen(PORT, () => {
-  console.log(`✅  HDR2SDR backend running on http://localhost:${PORT}`);
+// ── Serve the built frontend (run `npm run build` in ./frontend first) ───────
+// Keeping the UI and the API on one origin means no CORS/proxy config is needed
+// for LAN clients — they just open http://<lan-ip>:<PORT>/.
+const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist');
+const hasFrontendBuild = fs.existsSync(path.join(FRONTEND_DIST, 'index.html'));
+
+if (hasFrontendBuild) {
+  app.use(express.static(FRONTEND_DIST));
+  // SPA fallback — anything that is not an API route returns index.html
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+}
+
+// Ask the OS which local address it would use to reach the internet. That is
+// the interface your router is on, i.e. the one other devices on the wifi can
+// reach. Virtual adapters (VirtualBox, WSL, the Windows hotspot) never win this
+// lookup, so we avoid printing addresses nobody can actually open.
+// connect() on a UDP socket sends no packets — it only makes the OS pick a route.
+function primaryLanAddress() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = dgram.createSocket('udp4');
+    const done = (addr) => {
+      if (settled) return;
+      settled = true;
+      try { socket.close(); } catch { /* already closed */ }
+      resolve(addr);
+    };
+
+    socket.once('error', () => done(null));
+    setTimeout(() => done(null), 1000).unref();
+
+    try {
+      socket.connect(53, '8.8.8.8', () => {
+        let addr = null;
+        try { addr = socket.address().address; } catch { /* socket died */ }
+        done(addr && addr !== '0.0.0.0' ? addr : null);
+      });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+app.listen(PORT, HOST, async () => {
+  console.log('');
+  console.log(`✅  HDR2SDR running on port ${PORT}`);
+  console.log(`    On this PC:  http://localhost:${PORT}`);
+
+  const lan = await primaryLanAddress();
+  if (lan) {
+    console.log(`    On your wifi: http://${lan}:${PORT}   ← open this on other devices`);
+  } else {
+    console.log('    On your wifi: not detected — check that this PC is connected to the network.');
+  }
+
+  if (!hasFrontendBuild) {
+    console.log('');
+    console.log('    ⚠  No frontend build found — serving the API only.');
+    console.log('       Run "npm run build" in ./frontend to serve the UI from here too.');
+  }
+  console.log('');
 });
