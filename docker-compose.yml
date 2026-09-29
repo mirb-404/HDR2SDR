@@ -15,7 +15,7 @@ services:
 
     # tmpfs, not a volume, on purpose: working files live in RAM and cannot
     # outlive the container. Nothing to leave behind, nothing to back up by
-    # accident. Size it at roughly 3x the upload limit — an upload, its output,
+    # accident. Size it at roughly 3x the upload limit: an upload, its output,
     # and headroom.
     tmpfs:
       - /data:size=2g,mode=0770,uid=1000,gid=1000

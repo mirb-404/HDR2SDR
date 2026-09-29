@@ -1,13 +1,12 @@
 # Deploying HDR2SDR for free
 
-The awkward truth about this app: it is **CPU-bound**. Tone mapping runs every
-frame through 32-bit floating-point maths and then re-encodes it. That makes
-"free hosting" a question about how many CPU cores you get, not about bandwidth
-or storage.
+The awkward truth about this app is that it is limited by CPU. Tone mapping puts
+every frame through 32 bit floating point maths and then re-encodes it, so "free
+hosting" becomes a question about how many CPU cores you get rather than about
+bandwidth or storage.
 
-Anything serverless — Vercel, Netlify, Cloudflare Pages/Workers — is out. They
-have no FFmpeg, small request-body caps, and execution timeouts measured in
-seconds.
+Serverless hosts such as Vercel, Netlify and Cloudflare Pages are out. They have
+no FFmpeg, small upload limits, and timeouts measured in seconds.
 
 ---
 
@@ -15,8 +14,8 @@ seconds.
 
 | Host | CPU | RAM | Always on? | Card needed | Verdict |
 | --- | --- | --- | --- | --- | --- |
-| **Oracle Cloud Always Free** | 2 dedicated ARM cores | 12 GB | Yes | Yes (verification only) | **Best free option.** ~20x the encoding speed of the others. |
-| **Render Free** | 0.1 shared vCPU | 512 MB | No — sleeps after 15 min | No | **Easiest.** Fine for short clips and demo links. |
+| **Oracle Cloud Always Free** | 2 dedicated ARM cores | 12 GB | Yes | Yes (verification only) | **Best free option.** Roughly 20x the encoding speed of the others. |
+| **Render Free** | 0.1 shared vCPU | 512 MB | No, sleeps after 15 min | No | **Easiest.** Fine for short clips and demo links. |
 | Fly.io / Railway / Koyeb | varies | varies | varies | Yes | Trial credits, then billed. Not actually free. |
 | Hugging Face Spaces | 2 vCPU | 16 GB | Yes | No | Docker Spaces now need PRO ($9/mo). Free only for Gradio. |
 
@@ -26,7 +25,7 @@ how long conversions take.
 
 ---
 
-## Option 1 — Render (fastest to a public URL)
+## Option 1: Render, fastest to a public address
 
 Free, no card, HTTPS included, and `render.yaml` in this repo configures
 everything.
@@ -34,16 +33,16 @@ everything.
 1. Push this repo to GitHub.
 2. Go to [render.com](https://render.com) → **New** → **Blueprint**.
 3. Point it at your repo. Render reads `render.yaml` and needs nothing else.
-4. Wait for the first build (~5 minutes — it compiles the frontend and installs
-   FFmpeg).
+4. Wait for the first build, about 5 minutes. It compiles the frontend and
+   installs FFmpeg.
 
 You get `https://hdr2sdr-xxxx.onrender.com`.
 
 **What to expect.** The free instance has 0.1 CPU and 512 MB RAM, sleeps after
 15 minutes of no traffic, and takes about a minute to wake up. It also gets 750
 instance-hours per month per workspace. Because of the CPU, `render.yaml` sets
-the upload limit to **150 MB** and the preset to `veryfast` — the UI reads those
-values from the server, so the site will correctly advertise 150 MB rather than
+the upload limit to **150 MB** and the preset to `veryfast`. The UI reads those
+values from the server, so the site correctly advertises 150 MB rather than
 500 MB. A one-minute 1080p clip still takes several minutes to convert.
 
 Do not use an uptime pinger to defeat the sleep. It burns your 750 hours and
@@ -51,7 +50,7 @@ Render asks you not to.
 
 ---
 
-## Option 2 — Oracle Cloud Always Free (best performance)
+## Option 2: Oracle Cloud Always Free, best performance
 
 Two **dedicated** ARM cores instead of a tenth of a shared one. This is the
 difference between a conversion taking 40 minutes and taking 2.
@@ -70,7 +69,7 @@ difference between a conversion taking 40 minutes and taking 2.
    - Image: **Ubuntu 22.04** (ARM64)
    - Save the SSH key it offers you.
 3. Open ports 80 and 443 in the VCN security list **and** in the instance
-   firewall — Oracle images block them by default, which is the single most
+   firewall. Oracle images block them by default, which is the single most
    common reason a new Oracle VM appears dead:
 
    ```sh
@@ -105,8 +104,8 @@ sudo apt install -y caddy
 ```caddyfile
 hdr2sdr.example.com {
     # Must be at least as large as MAX_UPLOAD_MB, or the proxy rejects the
-    # upload before the app ever sees it — and it does so with an unhelpful
-    # error. This is the most common deployment mistake with this app.
+    # upload before the app ever sees it, and with an unhelpful error too.
+    # This is the most common deployment mistake with this app.
     request_body {
         max_size 550MB
     }
@@ -166,7 +165,7 @@ The number on the upload zone can never disagree with what the server enforces.
 | Variable | Render free | Oracle free | Meaning |
 | --- | --- | --- | --- |
 | `MAX_UPLOAD_MB` | `150` | `500` | Largest accepted file |
-| `MAX_CONCURRENT_JOBS` | `1` | `1` | FFmpeg already uses every core; 2 just makes both slower |
+| `MAX_CONCURRENT_JOBS` | `1` | `1` | FFmpeg already uses every core, so 2 just makes both slower |
 | `MAX_QUEUED_JOBS` | `2` | `3` | Extra waiters get a clear "server is busy" |
 | `VIDEO_PRESET` | `veryfast` | `fast` | Slower preset, smaller file, same quality |
 | `FFMPEG_TIMEOUT_MINUTES` | `20` | `30` | Stops one huge file blocking the queue |
@@ -211,13 +210,13 @@ sweeps anything older than `JOB_TTL_MINUTES` every minute. Two things can
 quietly undermine that at the infrastructure layer:
 
 - **Do not mount a persistent volume at `DATA_DIR`.** `docker-compose.yml` uses
-  a `tmpfs` deliberately — working files live in RAM and cannot survive a
-  restart, so there is nothing to back up by accident.
+  a `tmpfs` deliberately, so working files live in RAM and cannot survive a
+  restart. There is nothing to back up by accident.
 - **Do not enable access logging with request bodies** in your reverse proxy.
-  The app logs nothing about requests by design; a proxy log would reintroduce
+  The app logs nothing about requests by design, so a proxy log would put back
   exactly the record the site promises does not exist. Caddy and nginx log URLs
-  and IPs by default — that is worth turning off if you want the claim to be
-  strictly true:
+  and IP addresses by default, which is worth turning off if you want the claim
+  to be strictly true:
 
   ```caddyfile
   hdr2sdr.example.com {
@@ -232,7 +231,7 @@ quietly undermine that at the infrastructure layer:
 
 ## Sources
 
-Free-tier terms change often — these were checked in September 2026:
+Free tier terms change often. These were checked in September 2026:
 
 - [Render: Deploy for Free](https://render.com/docs/free)
 - [Oracle halves Always Free Ampere A1 limits (InfoQ, July 2026)](https://www.infoq.com/news/2026/07/oracle-cloud-free-tier-limits/)

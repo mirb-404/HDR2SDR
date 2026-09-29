@@ -57,6 +57,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Node as PID 1 handles SIGTERM here because server.js installs a handler for
-# it — that handler kills running encodes and wipes the working directory,
+# it. That handler kills running encodes and wipes the working directory,
 # which is what keeps the deletion promise true across a redeploy.
 CMD ["node", "backend/server.js"]

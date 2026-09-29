@@ -1,28 +1,45 @@
-/* No webfont import on purpose. Pulling Inter from fonts.googleapis.com would
+/* No webfont import on purpose. Pulling a font from fonts.googleapis.com would
    send every visitor's IP address and User-Agent to Google before the page even
-   renders — which would make the "we collect nothing" promise on this site a
-   lie. The system stack below looks close enough and costs zero requests. */
+   renders, which would make the "we collect nothing" promise on this site a
+   lie. The system stack below costs zero requests. */
 
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #0a0a0f;
-  --bg-card: #111118;
-  --bg-card-hover: #16161f;
-  --border: rgba(255,255,255,0.07);
-  --border-active: rgba(139,92,246,0.5);
-  --accent: #7c3aed;
-  --accent-light: #a78bfa;
-  --accent-glow: rgba(124,58,237,0.3);
-  --text-primary: #f1f0fb;
-  --text-secondary: #94a3b8;
-  --text-muted: #475569;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --danger: #ef4444;
+  /* Brand. One strong warm orange, used large and without apology, plus a deep
+     navy for the mark and for anything that needs weight. The orange stands for
+     the blown out highlights this tool tames, which is why the logo runs one
+     into the other. */
+  --brand: #f5541d;
+  --brand-hover: #e0430e;
+  --brand-press: #c63a0b;
+  --brand-tint: #fff1ec;
+  --brand-tint-2: #ffe3d8;
+
+  --navy: #1d2340;
+  --navy-soft: #333c63;
+
+  --bg: #ffffff;
+  --bg-alt: #f7f8fa;
+  --surface: #ffffff;
+
+  --border: #e3e7ec;
+  --border-strong: #ccd3dc;
+
+  --text: #16191f;
+  --text-2: #57616f;
+  --text-3: #8b94a3;
+
+  --good: #12a150;
+  --good-tint: #e9f8ef;
+  --bad: #d92d20;
+  --bad-tint: #fef3f2;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 28px rgba(16, 24, 40, 0.12);
+  --shadow-brand: 0 8px 20px rgba(245, 84, 29, 0.28);
 }
-
-
 
 html {
   scroll-behavior: smooth;
@@ -30,262 +47,230 @@ html {
 
 body {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  /* dvh tracks the collapsing mobile URL bar; vh is the fallback for old browsers */
+  background-color: var(--bg);
+  color: var(--text);
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
-  /* Stop iOS inflating text when the phone is rotated to landscape */
+  -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
 
-/* Kill the grey flash and the 300ms double-tap-zoom delay on touch devices */
 button, a, [role='button'], label, input, select, textarea {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
-/* Custom scrollbar (desktop; mobile uses overlay scrollbars) */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-primary); }
-::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
+::selection { background: var(--brand-tint-2); color: var(--text); }
 
-/* Selection */
-::selection { background: var(--accent); color: #fff; }
-
-/* Animated gradient background */
-.gradient-bg {
-  background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(124,58,237,0.25) 0%, transparent 70%),
-              radial-gradient(ellipse 40% 40% at 80% 80%, rgba(59,130,246,0.1) 0%, transparent 60%),
-              var(--bg-primary);
+:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
-/* Glass card */
-.glass {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-}
-
-@media (hover: hover) {
-  .glass:hover {
-    border-color: rgba(139,92,246,0.2);
-  }
-}
-
-/* Glow effect */
-.glow {
-  box-shadow: 0 0 30px var(--accent-glow);
-}
-
-/* Mono font for code */
 .mono {
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
-/* Input styles */
-.input-base {
-  background: rgba(255,255,255,0.05);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-primary);
-  padding: 10px 14px;
-  width: 100%;
-  transition: all 0.2s;
-  font-size: 0.875rem;
-  outline: none;
-}
-
-.input-base:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-/* Anything under 16px makes iOS Safari zoom the page in on focus */
-@media (max-width: 640px) {
-  .input-base { font-size: 16px; }
-}
-
-/* Button styles */
-.btn-primary {
-  background: linear-gradient(135deg, #7c3aed, #5b21b6);
-  color: #fff;
-  border: none;
-  border-radius: 10px;
-  padding: 12px 28px;
-  min-height: 44px; /* Apple/Android minimum comfortable touch target */
-  font-weight: 600;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: all 0.2s;
+/* ── Buttons ────────────────────────────────────────────────────────────────
+   The primary button is the product. It is oversized, saturated and lifted off
+   the page on purpose, because on a single-purpose tool the main action should
+   be the first thing the eye lands on and impossible to miss. */
+.btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   justify-content: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 12px 22px;
+  min-height: 46px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease,
+              border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
 
-/* Hover-only styling — on touch screens a tap leaves :hover stuck on */
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--brand);
+  color: #fff;
+  box-shadow: var(--shadow-brand);
+}
+
 @media (hover: hover) {
-  .btn-primary:hover:not(:disabled) {
-    background: linear-gradient(135deg, #8b5cf6, #6d28d9);
-    transform: translateY(-1px);
-    box-shadow: 0 8px 25px rgba(124,58,237,0.4);
-  }
+  .btn-primary:hover:not(:disabled) { background: var(--brand-hover); }
 }
-
-.btn-primary:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.btn-primary:active:not(:disabled) { background: var(--brand-press); transform: translateY(1px); }
 
 .btn-secondary {
-  background: rgba(255,255,255,0.06);
-  color: var(--text-secondary);
+  background: var(--surface);
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+
+@media (hover: hover) {
+  .btn-secondary:hover:not(:disabled) { background: var(--bg-alt); color: var(--text); }
+}
+
+/* The hero call to action. Deliberately huge. */
+.btn-hero {
+  font-size: 1.15rem;
+  font-weight: 700;
+  padding: 22px 52px;
+  min-height: 68px;
+  border-radius: 14px;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 480px) {
+  .btn-hero {
+    width: 100%;
+    font-size: 1.05rem;
+    padding: 20px 28px;
+  }
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 20px;
-  min-height: 44px;
-  font-weight: 500;
-  font-size: 0.875rem;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: inline-flex;
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+}
+
+@media (hover: hover) {
+  .tile:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+  }
+}
+
+/* ── Drop target ───────────────────────────────────────────────────────────
+   Dragging a file anywhere over the page arms the whole window, so there is no
+   small rectangle to aim at. */
+.page-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(245, 84, 29, 0.06);
+  backdrop-filter: blur(2px);
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  pointer-events: none;
 }
 
-@media (hover: hover) {
-  .btn-secondary:hover {
-    background: rgba(255,255,255,0.1);
-    color: var(--text-primary);
-  }
+.page-drop-inner {
+  border: 3px dashed var(--brand);
+  border-radius: 20px;
+  background: #fff;
+  padding: 40px 56px;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
 }
 
-.btn-secondary:active {
-  background: rgba(255,255,255,0.12);
-}
-
-/* Range slider */
-input[type='range'] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  background: rgba(255,255,255,0.1);
-  border-radius: 3px;
-  outline: none;
-}
-
-input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-  box-shadow: 0 0 8px var(--accent-glow);
-  transition: all 0.15s;
-}
-
-@media (hover: hover) {
-  input[type='range']::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-    box-shadow: 0 0 14px var(--accent-glow);
-  }
-}
-
-@media (pointer: coarse) {
-  input[type='range'] { height: 10px; }
-  input[type='range']::-webkit-slider-thumb { width: 26px; height: 26px; }
-}
-
-/* Progress bar */
-.progress-bar-track {
-  background: rgba(255,255,255,0.08);
-  border-radius: 9999px;
-  height: 10px;
+/* ── Progress ───────────────────────────────────────────────────────────── */
+.progress-track {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  height: 12px;
   overflow: hidden;
 }
 
-.progress-bar-fill {
+.progress-fill {
   height: 100%;
-  border-radius: 9999px;
-  background: linear-gradient(90deg, #7c3aed, #a78bfa, #60a5fa);
-  background-size: 200% 100%;
-  animation: shimmer 2s linear infinite;
+  background: var(--brand);
+  border-radius: 999px;
   transition: width 0.4s ease;
 }
 
-@keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+/* ── Before and after slider ───────────────────────────────────────────── */
+.ba {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  cursor: ew-resize;
+  user-select: none;
+  /* pan-y, not none: a horizontal drag works the slider while a vertical swipe
+     still scrolls the page. With touch-action:none this large panel becomes a
+     dead zone that traps scrolling on a phone. */
+  touch-action: pan-y;
+  line-height: 0;
 }
 
-/* Upload drop zone */
-.drop-zone {
-  border: 2px dashed rgba(124,58,237,0.35);
-  border-radius: 16px;
-  transition: all 0.25s;
+.ba-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, 0.15);
+  pointer-events: none;
 }
 
-.drop-zone:active {
-  border-color: var(--accent);
-  background: rgba(124,58,237,0.07);
+.ba-knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
 }
 
-.drop-zone.dragging {
-  border-color: var(--accent);
-  background: rgba(124,58,237,0.07);
-  box-shadow: 0 0 30px var(--accent-glow);
+.ba-tag {
+  position: absolute;
+  top: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 6px;
+  pointer-events: none;
+  line-height: 1.2;
 }
 
-/* Pulse animation */
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 10px var(--accent-glow); }
-  50% { box-shadow: 0 0 30px rgba(124,58,237,0.6); }
+/* ── Disclosure ────────────────────────────────────────────────────────── */
+.disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
 }
 
-.pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
+.disclosure > * { overflow: hidden; min-height: 0; }
+.disclosure.open { grid-template-rows: 1fr; }
 
-/* Fade in animation */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(20px); }
+/* ── Motion ────────────────────────────────────────────────────────────── */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.fade-in-up {
-  animation: fadeInUp 0.5s ease both;
-}
+.rise { animation: rise 0.3s ease both; }
 
-/* Accordion — grid-rows animates to the content's real height, so long
-   explanations never get clipped the way a fixed max-height clips them
-   once the text wraps onto many lines on a narrow phone. */
-.accordion-content {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.35s ease;
-}
-
-.accordion-content > * {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.accordion-content.open {
-  grid-template-rows: 1fr;
-}
-
-/* Respect users who ask their phone to cut down on motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

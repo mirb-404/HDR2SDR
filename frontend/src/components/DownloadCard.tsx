@@ -25,7 +25,7 @@ export default function DownloadCard({ jobId, originalName, retentionMinutes }: 
       url = URL.createObjectURL(blob)
 
       // The server sends a generic filename because it was never told the real
-      // one. The browser still has it, so the download gets named here.
+      // one, so the download gets named here instead.
       const a = document.createElement('a')
       a.href = url
       a.download = `${originalName.replace(/\.[^.]+$/, '')}_sdr.mp4`
@@ -36,66 +36,55 @@ export default function DownloadCard({ jobId, originalName, retentionMinutes }: 
     } catch (e) {
       setFailed((e as Error).message)
     } finally {
-      // Revoking immediately after click() can cancel the download in Safari,
-      // so the object URL is released on the next turn of the event loop.
+      // Revoking straight after click() can cancel the download in Safari, so
+      // the object URL is released on a later turn of the event loop.
       if (url) setTimeout(() => URL.revokeObjectURL(url!), 1000)
       setDownloading(false)
     }
   }
 
   return (
-    <div className="glass rounded-2xl p-4 sm:p-6 fade-in-up" style={{ border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.05)' }}>
-      <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4">
-        <div className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.4)' }}>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style={{ color: '#10b981' }}>
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            <polyline points="22 4 12 14.01 9 11.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </div>
-        <div className="flex-1 text-center sm:text-left">
-          <p className="font-bold text-base" style={{ color: '#10b981' }}>Conversion complete</p>
-          <p className="text-sm mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            Your SDR video is ready — same resolution, BT.709 colour, audio intact.
-          </p>
-        </div>
-        <button
-          onClick={handleDownload}
-          disabled={downloading}
-          className="btn-primary w-full sm:w-auto flex-shrink-0"
-          style={downloading ? {} : { background: 'linear-gradient(135deg, #059669, #047857)' }}
-          id="download-btn"
-        >
-          {downloading ? (
-            <>
-              <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" style={{ opacity: 0.25 }}/>
-                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/>
-              </svg>
-              Downloading…
-            </>
-          ) : (
-            <>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <polyline points="7 10 12 15 17 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-              Download SDR Video
-            </>
-          )}
-        </button>
-      </div>
+    <div className="text-center py-4 rise">
+      <span
+        className="inline-flex items-center justify-center w-14 h-14 rounded-full mb-5"
+        style={{ background: 'var(--good-tint)', color: 'var(--good)' }}
+      >
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </span>
 
-      {/* The deadline matters — say it before they wander off, not after. */}
-      <p className="mt-4 text-xs text-center sm:text-left leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+      <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight" style={{ color: 'var(--text)' }}>
+        Your video is ready
+      </h2>
+      <p className="text-sm mt-2 mb-6" style={{ color: 'var(--text-2)' }}>
+        Same size and sharpness, sound kept, and it plays anywhere.
+      </p>
+
+      <button
+        onClick={handleDownload}
+        disabled={downloading}
+        className="btn btn-primary btn-hero"
+        id="download-btn"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 4v12M12 16l-4.5-4.5M12 16l4.5-4.5" stroke="currentColor" strokeWidth="2.2"
+            strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/>
+        </svg>
+        {downloading ? 'Downloading' : 'Download video'}
+      </button>
+
+      {/* The deadline matters, so it is said before they wander off. */}
+      <p className="mt-5 text-[13px] leading-relaxed max-w-md mx-auto" style={{ color: 'var(--text-3)' }}>
         {collected
-          ? 'Downloaded — that file has now been deleted from the server. Nothing about this conversion was kept.'
-          : `Download it now: the file is deleted the moment you do, and erased automatically within ${retentionMinutes} minutes either way.`}
+          ? 'Done. That file has been deleted from the server and nothing about this conversion was kept.'
+          : `Grab it now. The file is deleted the moment you download it, and erased within ${retentionMinutes} minutes either way.`}
       </p>
 
       {failed && (
-        <p className="mt-3 text-xs px-3 py-2.5 rounded-lg" role="alert"
-          style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444' }}>
+        <p className="mt-4 text-sm px-4 py-3 rounded-lg inline-block" role="alert"
+          style={{ background: 'var(--bad-tint)', border: '1px solid #fecdca', color: 'var(--bad)' }}>
           {failed}
         </p>
       )}

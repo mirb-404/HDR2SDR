@@ -1,4 +1,4 @@
-# Render blueprint — free tier.
+# Render blueprint for the free tier.
 #
 # Deploy: push this repo to GitHub, then New → Blueprint on render.com and
 # point it at the repo. Render reads this file and needs nothing else.

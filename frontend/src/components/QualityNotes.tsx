@@ -1,110 +1,111 @@
-import type { ServerConfig } from '../siteConfig'
-
-interface Props {
-  config: ServerConfig
-}
-
 /**
- * The "what you keep" section. People are rightly suspicious that a free
- * converter will hand back a washed-out, re-compressed mess, so this spells out
- * what the pipeline actually preserves and why.
+ * Benefit tiles. Each gets its own colour so the grid reads at a glance rather
+ * than as a wall of paragraphs, and the wording stays out of the technical
+ * weeds. The reasoning behind each one lives in the README.
  */
-export default function QualityNotes({ config }: Props) {
+export default function QualityNotes() {
   const points = [
     {
-      title: 'Full resolution, untouched',
-      body: 'No downscaling, no cropping, no watermark. A 4K clip comes back 4K, frame for frame, at the original frame rate.',
+      title: 'Same size and sharpness',
+      body: 'No shrinking, no cropping and no watermark. A 4K clip comes back as 4K.',
+      color: '#f5541d',
+      tint: '#fff1ec',
       icon: (
         <>
-          <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M4 9V5a1 1 0 011-1h4M15 4h4a1 1 0 011 1v4M20 15v4a1 1 0 01-1 1h-4M9 20H5a1 1 0 01-1-1v-4"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </>
       ),
-      color: '#7c3aed',
     },
     {
-      title: 'Tone-mapped, not clipped',
-      body: 'The lazy way to kill HDR is to clamp everything brighter than white, which blows out skies and skin. The Hable filmic curve rolls highlights off gradually instead, so clouds, sunsets and bright windows keep their detail.',
+      title: 'Bright areas keep detail',
+      body: 'Skies, windows and sunsets stay as they were instead of turning into flat white patches.',
+      color: '#0b7ddb',
+      tint: '#e8f3fd',
       icon: (
         <>
-          <path d="M3 17c3-8 6-10 9-10s6 2 9 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/>
-          <circle cx="12" cy="7" r="1.5" fill="currentColor"/>
+          <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="2"/>
+          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"
+            stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
         </>
       ),
-      color: '#10b981',
     },
     {
-      title: 'Maths done in 32-bit float',
-      body: 'The whole chain runs in linear light at floating-point precision before it is written back to 8-bit. That is what stops the banding you normally see across gradients and dark scenes.',
+      title: 'Smooth colour, no blotches',
+      body: 'Gradients and dark scenes come out clean, without the banding you often get from a quick convert.',
+      color: '#8b3ddb',
+      tint: '#f3ecfd',
       icon: (
         <>
-          <path d="M4 12h16M12 4v16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" fill="none"/>
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2"/>
+          <path d="M12 3a9 9 0 010 18z" fill="currentColor" opacity="0.35"/>
         </>
       ),
-      color: '#3b82f6',
     },
     {
-      title: 'Colours land where they should',
-      body: 'Output is tagged BT.709 for primaries, transfer and matrix. Players do not have to guess what they are being handed, which is the usual reason a "converted" file still looks grey or oversaturated.',
+      title: 'Sound comes along',
+      body: 'Your audio is kept and stays in sync. Nothing is muted or trimmed.',
+      color: '#12a150',
+      tint: '#e9f8ef',
       icon: (
         <>
-          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" fill="none"/>
-          <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" opacity="0.5"/>
+          <path d="M11 5L6 9H3v6h3l5 4V5z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+          <path d="M16 9a4 4 0 010 6M19 6a8 8 0 010 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
         </>
       ),
-      color: '#f59e0b',
     },
     {
-      title: `Near-transparent re-encode (CRF ${config.crf})`,
-      body: `HDR has to be re-encoded — there is no way around that — so it is done at CRF ${config.crf}, well above the point where differences become visible. Audio is kept and re-muxed at ${config.audio}.`,
+      title: 'Plays anywhere',
+      body: 'Any browser, phone, TV or editor. No codec packs and no unsupported format warnings.',
+      color: '#d64f8a',
+      tint: '#fdecf4',
       icon: (
         <>
-          <path d="M9 18V5l12-2v13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-          <circle cx="6" cy="18" r="3" stroke="currentColor" strokeWidth="2" fill="none"/>
-          <circle cx="18" cy="16" r="3" stroke="currentColor" strokeWidth="2" fill="none"/>
+          <rect x="2" y="4" width="20" height="13" rx="2" stroke="currentColor" strokeWidth="2"/>
+          <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
         </>
       ),
-      color: '#ec4899',
     },
     {
-      title: 'Plays on literally everything',
-      body: 'H.264 in an MP4 with faststart. It opens in every browser, phone, smart TV and editor — no codec packs, no "unsupported format", and it starts playing before it finishes downloading.',
+      title: 'Nothing is kept',
+      body: 'Your video is deleted the moment it is converted. No account and no tracking.',
+      color: '#0d9488',
+      tint: '#e6f6f4',
       icon: (
         <>
-          <rect x="2" y="4" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="2" fill="none"/>
-          <path d="M8 21h8M12 18v3" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+          <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </>
       ),
-      color: '#06b6d4',
     },
   ]
 
   return (
-    <div className="glass rounded-2xl overflow-hidden">
-      <div className="px-4 sm:px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
-        <h2 className="font-bold text-base" style={{ color: 'var(--text-primary)' }}>
-          HDR comes off. The quality stays on.
+    <section>
+      <div className="text-center mb-10">
+        <h2 className="text-2xl sm:text-[28px] font-extrabold tracking-tight" style={{ color: 'var(--text)' }}>
+          Everything else stays exactly as it was
         </h2>
-        <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          Converting to SDR normally means a flat, washed-out video. Here is what this
-          pipeline does differently.
+        <p className="text-base mt-3 max-w-xl mx-auto" style={{ color: 'var(--text-2)' }}>
+          Converting usually leaves video looking flat and grey. Only the brightness
+          and colour change here.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0" style={{ borderColor: 'var(--border)' }}>
-        {points.map(({ title, body, icon, color }) => (
-          <div key={title} className="px-4 sm:px-6 py-4 flex gap-3" style={{ borderColor: 'var(--border)' }}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
-              style={{ background: `${color}1f`, border: `1px solid ${color}44`, color }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">{icon}</svg>
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</p>
-              <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{body}</p>
-            </div>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {points.map(({ title, body, color, tint, icon }) => (
+          <div key={title} className="tile">
+            <span
+              className="inline-flex items-center justify-center w-11 h-11 rounded-[10px] mb-4"
+              style={{ background: tint, color }}
+            >
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none">{icon}</svg>
+            </span>
+            <p className="font-bold text-[15px] mb-1.5" style={{ color: 'var(--text)' }}>{title}</p>
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-2)' }}>{body}</p>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   )
 }

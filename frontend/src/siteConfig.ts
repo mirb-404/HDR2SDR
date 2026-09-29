@@ -5,7 +5,7 @@
 
 // ── Attribution ──────────────────────────────────────────────────────────────
 // Change the name or the links here and every place they appear in the UI
-// updates — header, footer and the privacy section's "read the source" link.
+// updates: the header, the footer and the privacy section's source link.
 export const AUTHOR = {
   name: 'Mirang Bhandari',
   githubUser: 'mirb-404',

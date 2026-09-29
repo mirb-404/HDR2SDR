@@ -1,5 +1,5 @@
 /**
- * HDR2SDR — HDR to SDR video tone-mapping service.
+ * HDR2SDR: HDR to SDR video tone-mapping service.
  *
  * Privacy model (this is a promise the code has to keep, not just marketing):
  *   - No database, no accounts, no cookies, no analytics, no third-party calls.
@@ -49,7 +49,7 @@ const AUDIO_BITRATE = process.env.AUDIO_BITRATE || '192k';
 const FFMPEG_BIN = process.env.FFMPEG_PATH || 'ffmpeg';
 
 // Uploads and outputs live here. Point DATA_DIR at a mounted volume (or /tmp on
-// an ephemeral host — ephemeral is a feature here, not a problem).
+// an ephemeral host, where being wiped on restart is a feature here).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '.data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const OUTPUTS_DIR = path.join(DATA_DIR, 'outputs');
@@ -71,7 +71,7 @@ for (const dir of [UPLOADS_DIR, OUTPUTS_DIR]) {
 }
 
 // ── Security headers ─────────────────────────────────────────────────────────
-// The page loads no third-party anything — no CDN, no fonts, no analytics — so
+// The page loads no third-party anything: no CDN, no fonts, no analytics, so
 // the CSP can be strict enough to prove it. 'unsafe-inline' for styles is the
 // one concession: the UI uses React inline `style` props throughout.
 const CSP = [
@@ -227,8 +227,8 @@ async function destroyJob(jobId) {
 
 function emit(jobId, payload) {
   const job = jobs.get(jobId);
-  // Remember the last event so a browser that connects late — or reconnects
-  // after the phone slept — is told the current state instead of hanging on an
+  // Remember the last event so a browser that connects late, or reconnects
+  // after the phone slept, is told the current state instead of hanging on an
   // empty stream forever.
   if (job) job.lastEvent = payload;
   const client = sseClients.get(jobId);
@@ -273,7 +273,7 @@ app.post(
         lastEvent: null,
       });
 
-      // Deliberately returns the job id and nothing else — the server has no
+      // Deliberately returns the job id and nothing else. The server has no
       // opinion about what this file is called.
       res.json({ jobId, expiresInMinutes: Math.round(JOB_TTL_MS / 60000) });
     });
@@ -288,7 +288,7 @@ app.post('/api/convert', rateLimit(API_LIMIT, 'api'), (req, res) => {
   }
 
   const job = jobs.get(jobId);
-  if (!job) return res.status(404).json({ error: 'Job not found — it may have expired.' });
+  if (!job) return res.status(404).json({ error: 'Job not found. It may have expired.' });
 
   // Without this guard, replaying the request spawns a second ffmpeg writing to
   // the same output file, which is both a corruption bug and a free DoS.
@@ -326,7 +326,7 @@ function startConversion(jobId) {
   job.state = 'converting';
   activeJobs++;
 
-  // The tone-mapping chain, unchanged — linear light, float32 math, BT.2020 to
+  // The tone-mapping chain, unchanged: linear light, float32 math, BT.2020 to
   // BT.709 gamut, Hable filmic curve, then BT.709 gamma at TV range.
   const filter = [
     'zscale=t=linear:npl=100',
@@ -441,7 +441,7 @@ function startConversion(jobId) {
         ? 'The video encoder is unavailable on the server. Please try again later.'
         : 'Conversion failed to start.',
     });
-    if (missing) console.error('[fatal] ffmpeg binary not found — set FFMPEG_PATH or install ffmpeg.');
+    if (missing) console.error('[fatal] ffmpeg binary not found. Set FFMPEG_PATH or install ffmpeg.');
   });
 
   child.on('close', (code, signal) => {
@@ -490,7 +490,7 @@ app.get('/api/progress/:jobId', (req, res) => {
 
   const job = jobs.get(jobId);
   if (!job) {
-    res.write(`data: ${JSON.stringify({ error: 'Job not found — it may have expired.' })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: 'Job not found. It may have expired.' })}\n\n`);
     sseClients.delete(jobId);
     return res.end();
   }
@@ -525,7 +525,7 @@ app.get('/api/download/:jobId', rateLimit(API_LIMIT, 'api'), (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="converted_sdr.mp4"');
 
   res.sendFile(job.outputPath, (err) => {
-    // Delete on success only — a half-finished download deserves a retry, and
+    // Delete on success only. A half-finished download deserves a retry, and
     // the TTL sweeper will take it soon enough regardless.
     if (!err) destroyJob(jobId);
   });
@@ -579,7 +579,7 @@ async function sweep() {
         const stat = await fsp.stat(full);
         if (stat.mtimeMs < cutoff) await safeUnlink(full);
       } catch {
-        /* vanished between readdir and stat — already gone, which is the goal */
+        /* vanished between readdir and stat, so already gone, which is the goal */
       }
     }
   }
@@ -612,7 +612,7 @@ if (hasFrontendBuild) {
 
 app.use('/api/*', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
-// Last-resort handler. It must not echo the error back — stack traces leak
+// Last-resort handler. It must not echo the error back, because stack traces leak
 // paths and versions.
 app.use((err, req, res, _next) => {
   console.error('[error]', err.message);
@@ -688,7 +688,7 @@ const server = app.listen(PORT, HOST, async () => {
   }
   if (!hasFrontendBuild) {
     console.log('');
-    console.log('    ⚠  No frontend build — serving the API only. Run: npm run build');
+    console.log('    ⚠  No frontend build, serving the API only. Run: npm run build');
   }
   console.log('');
 });
@@ -700,7 +700,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`\n${signal} received — stopping jobs and wiping working files.`);
+    console.log(`\n${signal} received. Stopping jobs and wiping working files.`);
 
     server.close();
     for (const jobId of [...jobs.keys()]) destroyJob(jobId);

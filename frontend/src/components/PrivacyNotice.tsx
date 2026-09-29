@@ -5,87 +5,83 @@ interface Props {
 }
 
 /**
- * The privacy section. Every claim here is one the code actually keeps — see
- * backend/server.js, where the upload is unlinked the moment ffmpeg exits and a
- * sweeper deletes anything older than the retention window regardless.
- *
- * Deliberately specific rather than reassuring: "no cookies" is checkable, and
- * the source link lets anyone check it.
+ * Every claim here is one the code actually keeps. See backend/server.js, where
+ * the upload is deleted the moment FFmpeg exits and a sweeper clears anything
+ * past the retention window regardless.
  */
 export default function PrivacyNotice({ config }: Props) {
   const promises = [
     {
-      title: 'Your upload is deleted the second it is converted',
-      body: 'Not queued for deletion, not marked for cleanup — unlinked from disk the moment FFmpeg exits, whether the conversion worked or failed.',
+      title: 'Deleted straight after converting',
+      body: `Your video goes the moment the conversion ends, whether it worked or not. The result is deleted as soon as you download it, and erased within ${config.retentionMinutes} minutes either way.`,
     },
     {
-      title: 'Your result is deleted as soon as you download it',
-      body: `And if you never come back for it, it is erased anyway within ${config.retentionMinutes} minutes. A sweeper runs every minute and takes everything past that deadline, including files left behind by a crash or restart.`,
+      title: 'No account, no cookies, no tracking',
+      body: 'There is no sign up and no analytics. The page loads nothing from any other company, right down to using your own system fonts so nobody else learns you visited.',
     },
     {
-      title: 'No accounts, no cookies, no analytics',
-      body: 'There is no sign-up, no session, no tracking pixel and no third-party script. This page makes zero requests to anyone but this server — the fonts are your system fonts precisely so Google never sees you visited.',
+      title: 'We never even learn the filename',
+      body: 'The server knows your video as a random ID and nothing else. Your browser remembers the real name and puts it back on the download.',
     },
     {
-      title: 'Your filename never leaves your browser',
-      body: 'The server knows your job as a random ID and nothing else. Your file is stored under that ID, and your browser renames the download afterwards. There is no record to keep.',
-    },
-    {
-      title: 'Nothing is logged',
-      body: 'No access log, no IP address on disk, no record that a conversion happened. Your IP is held in memory only, hashed with a key that is regenerated every restart, purely to stop one person hammering the server.',
-    },
-    {
-      title: 'Nobody watches your video',
-      body: 'It is passed to FFmpeg and thrown away. No preview is generated, no frame is kept, no human or model ever sees it.',
+      title: 'Nothing is written down',
+      body: 'No logs, no record that a conversion happened and no addresses kept on disk. Nobody watches your video and no frame of it is saved.',
     },
   ]
 
   return (
-    <div className="glass rounded-2xl overflow-hidden" id="privacy">
-      <div className="px-4 sm:px-6 py-4 border-b flex items-start gap-3" style={{ borderColor: 'var(--border)' }}>
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-          style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.35)' }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ color: '#10b981' }}>
+    <section id="privacy">
+      <div className="text-center mb-10">
+        <span
+          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-[13px] font-semibold mb-4"
+          style={{ background: 'var(--good-tint)', color: 'var(--good)' }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
-            <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
-        </div>
-        <div>
-          <h2 className="font-bold text-base" style={{ color: 'var(--text-primary)' }}>
-            Your data is not collected. At all.
-          </h2>
-          <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-            This is a converter, not a business. There is nothing to monetise and nothing kept.
-          </p>
-        </div>
+          Private by default
+        </span>
+        <h2 className="text-2xl sm:text-[28px] font-extrabold tracking-tight" style={{ color: 'var(--text)' }}>
+          Your video stays yours
+        </h2>
+        <p className="text-base mt-3 max-w-xl mx-auto" style={{ color: 'var(--text-2)' }}>
+          This is a free tool, not a business. There is nothing to collect and
+          nothing kept.
+        </p>
       </div>
 
-      <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+      <div className="grid sm:grid-cols-2 gap-4">
         {promises.map(({ title, body }) => (
-          <div key={title} className="px-4 sm:px-6 py-3.5 flex gap-3" style={{ borderColor: 'var(--border)' }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="flex-shrink-0 mt-0.5" style={{ color: '#10b981' }}>
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
-              <path d="M8 12l3 3 5-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
+          <div key={title} className="card p-5 flex gap-3.5">
+            <span
+              className="inline-flex items-center justify-center w-6 h-6 rounded-full flex-shrink-0 mt-0.5"
+              style={{ background: 'var(--good-tint)', color: 'var(--good)' }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </span>
             <div className="min-w-0">
-              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</p>
-              <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{body}</p>
+              <p className="font-bold text-[15px] mb-1" style={{ color: 'var(--text)' }}>{title}</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--text-2)' }}>{body}</p>
             </div>
           </div>
         ))}
       </div>
 
-      <div className="px-4 sm:px-6 py-4 border-t" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.02)' }}>
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-          Do not take any of this on trust — the whole thing is open source.{' '}
-          <a href={AUTHOR.repoUrl} target="_blank" rel="noopener noreferrer"
-            className="hover:underline font-medium" style={{ color: 'var(--accent-light)' }}>
-            Read the server code ↗
-          </a>{' '}
-          and check that it does what this page says. If you would rather not upload anything
-          at all, the README shows the exact FFmpeg command to run on your own machine.
-        </p>
-      </div>
-    </div>
+      <p className="text-sm leading-relaxed mt-6 text-center" style={{ color: 'var(--text-3)' }}>
+        You do not have to take any of that on trust.{' '}
+        <a
+          href={AUTHOR.repoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold underline underline-offset-2"
+          style={{ color: 'var(--brand)' }}
+        >
+          The code is public
+        </a>
+        , so you can check that it does what this page says.
+      </p>
+    </section>
   )
 }

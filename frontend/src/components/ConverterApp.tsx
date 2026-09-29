@@ -3,9 +3,11 @@ import UploadZone from './UploadZone'
 import OptionsPanel from './OptionsPanel'
 import ProgressBar from './ProgressBar'
 import DownloadCard from './DownloadCard'
-import FlagExplainer from './FlagExplainer'
 import QualityNotes from './QualityNotes'
 import PrivacyNotice from './PrivacyNotice'
+import BeforeAfter from './BeforeAfter'
+import HowItWorks from './HowItWorks'
+import { formatBytes } from '../siteConfig'
 import { useServerConfig } from '../useServerConfig'
 
 type Stage = 'upload' | 'options' | 'converting' | 'done' | 'error'
@@ -47,12 +49,8 @@ function uploadWithProgress(
         /* a proxy returned an HTML error page rather than our JSON */
       }
       if (xhr.status >= 200 && xhr.status < 300 && body?.jobId) return resolve({ jobId: body.jobId })
-      if (xhr.status === 413) {
-        return reject(new Error(body?.error ?? 'That file is over the size limit.'))
-      }
-      if (xhr.status === 429) {
-        return reject(new Error(body?.error ?? 'Too many uploads. Please wait a few minutes.'))
-      }
+      if (xhr.status === 413) return reject(new Error(body?.error ?? 'That file is over the size limit.'))
+      if (xhr.status === 429) return reject(new Error(body?.error ?? 'Too many uploads. Please wait a few minutes.'))
       reject(new Error(body?.error ?? `Upload failed (HTTP ${xhr.status}).`))
     }
 
@@ -101,11 +99,9 @@ export default function ConverterApp() {
     setError('')
 
     try {
-      const { jobId: id } = await uploadWithProgress(
-        file,
-        setUploadPercent,
-        (xhr) => { xhrRef.current = xhr }
-      )
+      const { jobId: id } = await uploadWithProgress(file, setUploadPercent, (xhr) => {
+        xhrRef.current = xhr
+      })
 
       setJobId(id)
       setUploading(false)
@@ -113,9 +109,9 @@ export default function ConverterApp() {
       setProgress(IDLE_PROGRESS)
       setQueuePosition(0)
 
-      // Subscribe before asking for the conversion, so no early progress event
+      // Subscribe before asking for the conversion so no early progress event
       // is missed. The server also replays the last event on connect, which
-      // covers a phone that slept and reconnected mid-encode.
+      // covers a phone that slept and reconnected mid encode.
       const es = new EventSource(`/api/progress/${id}`)
       eventSourceRef.current = es
 
@@ -149,7 +145,7 @@ export default function ConverterApp() {
 
       // The server ends the stream itself once a job finishes, so a close here
       // is normal and must not be reported as a failure.
-      es.onerror = () => { /* stream closed — terminal state already handled above */ }
+      es.onerror = () => { /* terminal states are already handled above */ }
 
       const convertRes = await fetch('/api/convert', {
         method: 'POST',
@@ -184,165 +180,163 @@ export default function ConverterApp() {
     setUploadPercent(0)
   }
 
+  const idle = stage === 'upload'
+
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6 sm:space-y-8">
-      {/* Hero */}
-      <div className="text-center space-y-3 mb-8 sm:mb-10">
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium mb-2"
-          style={{ background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', color: 'var(--accent-light)' }}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-          HDR → BT.709 SDR · Hable tone mapping
+    <>
+      {/* ── Hero ───────────────────────────────────────────────────────────
+          On a single purpose tool the action belongs above everything else, so
+          the upload button sits in the headline block rather than in a panel
+          further down the page. */}
+      <section className="px-5 sm:px-6 pt-14 sm:pt-20 pb-14">
+        <div className="max-w-3xl mx-auto text-center">
+          <h1
+            className="text-[34px] sm:text-5xl font-extrabold leading-[1.1] tracking-[-0.03em]"
+            style={{ color: 'var(--text)' }}
+          >
+            Fix HDR video that looks
+            <br className="hidden sm:block" />{' '}
+            <span style={{ color: 'var(--brand)' }}>washed out and grey</span>
+          </h1>
+          <p
+            className="text-base sm:text-lg mt-5 max-w-xl mx-auto leading-relaxed"
+            style={{ color: 'var(--text-2)' }}
+          >
+            HDR footage looks wrong on screens and apps that cannot handle it.
+            Convert it in a couple of clicks and keep every bit of the quality.
+          </p>
+
+          <div className="mt-9">
+            {idle && <UploadZone onFileSelected={handleFileSelected} config={config} />}
+          </div>
         </div>
-        <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>
-          Convert{' '}
-          <span style={{ background: 'linear-gradient(135deg, #a78bfa, #60a5fa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            HDR to SDR
-          </span>
-        </h1>
-        <p className="text-sm sm:text-base max-w-xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
-          Fix washed-out, grey HDR footage that will not play properly. Free, no sign-up,
-          and your file is deleted the moment it is converted.
-        </p>
-      </div>
 
-      {/* Step indicator */}
-      <div className="flex items-center justify-center gap-1.5 sm:gap-3 mb-4">
-        {(['upload', 'options', 'converting', 'done'] as Stage[]).map((s, i) => {
-          const labels = ['Upload', 'Review', 'Converting', 'Done']
-          const isActive = stage === s
-          const isDone = ['upload', 'options', 'converting', 'done'].indexOf(stage) > i
-          return (
-            <div key={s} className="flex items-center gap-1.5 sm:gap-2">
-              {i > 0 && <div className="w-4 sm:w-8 h-px" style={{ background: isDone || isActive ? 'var(--accent)' : 'var(--border)' }} />}
-              <div className="flex items-center gap-1.5">
-                <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all"
-                  style={{
-                    background: isActive ? 'var(--accent)' : isDone ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.07)',
-                    color: isActive || isDone ? 'var(--accent-light)' : 'var(--text-muted)',
-                    border: isActive ? '2px solid var(--accent-light)' : isDone ? '2px solid rgba(124,58,237,0.5)' : '2px solid var(--border)',
-                  }}
-                >
-                  {isDone ? '✓' : i + 1}
-                </div>
-                <span className="text-xs hidden sm:inline" style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                  {labels[i]}
-                </span>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Main card */}
-      <div className="glass rounded-2xl overflow-hidden">
-        <div className="p-4 sm:p-6 md:p-8 space-y-6">
-
-          {/* Upload step */}
-          {(stage === 'upload' || stage === 'options') && (
-            <UploadZone onFileSelected={handleFileSelected} config={config} />
-          )}
-
-          {/* Options step */}
-          {stage === 'options' && file && (
-            <div className="fade-in-up space-y-6">
-              <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
-                <div className="flex items-center justify-between gap-3 mb-5">
-                  <h2 className="text-sm sm:text-base font-bold" style={{ color: 'var(--text-primary)' }}>What will happen to your file</h2>
-                  <button onClick={reset} disabled={uploading} className="btn-secondary text-xs py-1.5 px-3 flex-shrink-0">← Start over</button>
-                </div>
-                <OptionsPanel inputName={file.name} config={config} />
-              </div>
-
-              {uploading && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <span style={{ color: 'var(--text-secondary)' }}>Uploading…</span>
-                    <span className="mono font-bold" style={{ color: 'var(--accent-light)' }}>{uploadPercent}%</span>
-                  </div>
-                  <div className="progress-bar-track">
-                    <div className="progress-bar-fill" style={{ width: `${uploadPercent}%` }} />
-                  </div>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Your file is deleted as soon as the conversion finishes.
-                  </p>
-                </div>
-              )}
-
-              <button
-                onClick={handleConvert}
-                disabled={uploading}
-                className="btn-primary w-full py-3.5 text-base"
-                id="convert-btn"
-              >
-                {uploading ? (
-                  <>
-                    <svg className="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" style={{ opacity: 0.25 }}/>
-                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/>
+        {/* Working panel, shown once a file is in hand. */}
+        {!idle && (
+          <div className="max-w-xl mx-auto card p-5 sm:p-7 rise">
+            {stage === 'options' && file && (
+              <div>
+                <div className="flex items-center gap-3.5 pb-5 mb-5" style={{ borderBottom: '1px solid var(--border)' }}>
+                  <span
+                    className="inline-flex items-center justify-center w-11 h-11 rounded-[10px] flex-shrink-0"
+                    style={{ background: 'var(--brand-tint)', color: 'var(--brand)' }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M15 10l4.5-2.5v9L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <rect x="3" y="6" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/>
                     </svg>
-                    Uploading… {uploadPercent}%
-                  </>
-                ) : (
-                  <>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                    Start Conversion
-                  </>
-                )}
-              </button>
-            </div>
-          )}
-
-          {/* Converting */}
-          {stage === 'converting' && (
-            <ProgressBar {...progress} queuePosition={queuePosition} />
-          )}
-
-          {/* Done */}
-          {stage === 'done' && (
-            <div className="space-y-4 fade-in-up">
-              <DownloadCard
-                jobId={jobId}
-                originalName={file?.name ?? 'video.mp4'}
-                retentionMinutes={config.retentionMinutes}
-              />
-              <button onClick={reset} className="btn-secondary w-full" id="convert-another-btn">
-                Convert another video
-              </button>
-            </div>
-          )}
-
-          {/* Error */}
-          {stage === 'error' && (
-            <div className="fade-in-up">
-              <div className="rounded-2xl p-4 sm:p-6" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(239,68,68,0.2)' }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ color: '#ef4444' }}>
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
-                      <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                      <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-sm" style={{ color: '#ef4444' }}>Conversion Failed</p>
-                    <p className="text-sm mt-1 break-words" style={{ color: 'var(--text-secondary)' }}>{error}</p>
-                    <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
-                      Whatever went wrong, your file has already been deleted from the server.
+                  </span>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="font-semibold text-sm truncate" style={{ color: 'var(--text)' }}>
+                      {file.name}
+                    </p>
+                    <p className="text-[13px] mt-0.5" style={{ color: 'var(--text-3)' }}>
+                      {formatBytes(file.size)}
                     </p>
                   </div>
+                  <button
+                    onClick={reset}
+                    disabled={uploading}
+                    className="text-[13px] font-medium px-3 py-2 rounded-lg flex-shrink-0 transition-colors"
+                    style={{ color: 'var(--text-3)' }}
+                  >
+                    Remove
+                  </button>
                 </div>
-              </div>
-              <button onClick={reset} className="btn-secondary mt-4 w-full">Try again</button>
-            </div>
-          )}
-        </div>
-      </div>
 
-      <QualityNotes config={config} />
-      <FlagExplainer />
-      <PrivacyNotice config={config} />
-    </div>
+                <OptionsPanel inputName={file.name} config={config} />
+
+                {uploading && (
+                  <div className="mt-6">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <span className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>Uploading</span>
+                      <span className="text-sm font-bold mono" style={{ color: 'var(--brand)' }}>{uploadPercent}%</span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill" style={{ width: `${uploadPercent}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleConvert}
+                  disabled={uploading}
+                  className="btn btn-primary w-full mt-6 text-base"
+                  style={{ minHeight: '54px' }}
+                  id="convert-btn"
+                >
+                  {uploading ? `Uploading ${uploadPercent}%` : 'Convert to SDR'}
+                </button>
+              </div>
+            )}
+
+            {stage === 'converting' && <ProgressBar {...progress} queuePosition={queuePosition} />}
+
+            {stage === 'done' && (
+              <div>
+                <DownloadCard
+                  jobId={jobId}
+                  originalName={file?.name ?? 'video.mp4'}
+                  retentionMinutes={config.retentionMinutes}
+                />
+                <button onClick={reset} className="btn btn-secondary w-full mt-5" id="convert-another-btn">
+                  Convert another video
+                </button>
+              </div>
+            )}
+
+            {stage === 'error' && (
+              <div className="text-center py-3">
+                <span
+                  className="inline-flex items-center justify-center w-12 h-12 rounded-full mb-4"
+                  style={{ background: 'var(--bad-tint)', color: 'var(--bad)' }}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M12 8v5M12 16.5v.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"/>
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2"/>
+                  </svg>
+                </span>
+                <p className="text-lg font-bold" style={{ color: 'var(--text)' }}>That did not work</p>
+                <p className="text-sm mt-2 leading-relaxed break-words" style={{ color: 'var(--text-2)' }}>
+                  {error}
+                </p>
+                <p className="text-[13px] mt-3" style={{ color: 'var(--text-3)' }}>
+                  Whatever went wrong, your video has already been deleted from the server.
+                </p>
+                <button onClick={reset} className="btn btn-secondary w-full mt-6">
+                  Try again
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* ── Proof ────────────────────────────────────────────────────────── */}
+      <section style={{ background: 'var(--bg-alt)', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
+        <div className="max-w-3xl mx-auto px-5 sm:px-6 py-14 sm:py-16">
+          <div className="text-center mb-8">
+            <h2 className="text-2xl sm:text-[28px] font-extrabold tracking-tight" style={{ color: 'var(--text)' }}>
+              See the difference
+            </h2>
+            <p className="text-base mt-3 max-w-xl mx-auto" style={{ color: 'var(--text-2)' }}>
+              This is what HDR looks like on a screen that cannot show it, and what
+              it looks like afterwards.
+            </p>
+          </div>
+          <BeforeAfter />
+        </div>
+      </section>
+
+      {/* ── Everything else ──────────────────────────────────────────────── */}
+      <div className="max-w-5xl mx-auto px-5 sm:px-6 py-16 sm:py-20 space-y-20 sm:space-y-24">
+        <QualityNotes />
+        <HowItWorks
+          maxUploadLabel={config.maxUploadLabel}
+          retentionMinutes={config.retentionMinutes}
+        />
+        <PrivacyNotice config={config} />
+      </div>
+    </>
   )
 }
