@@ -3,30 +3,44 @@ import { useState } from 'react'
 interface Props {
   jobId: string
   originalName: string
+  retentionMinutes: number
 }
 
-export default function DownloadCard({ jobId, originalName }: Props) {
+export default function DownloadCard({ jobId, originalName, retentionMinutes }: Props) {
   const [downloading, setDownloading] = useState(false)
   const [failed, setFailed] = useState('')
+  const [collected, setCollected] = useState(false)
 
   const handleDownload = async () => {
     setDownloading(true)
     setFailed('')
+    let url: string | null = null
     try {
       const res = await fetch(`/api/download/${jobId}`)
-      if (!res.ok) throw new Error('Download failed')
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error ?? `Download failed (HTTP ${res.status}).`)
+      }
       const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
+      url = URL.createObjectURL(blob)
+
+      // The server sends a generic filename because it was never told the real
+      // one. The browser still has it, so the download gets named here.
       const a = document.createElement('a')
-      const baseName = originalName.replace(/\.[^.]+$/, '')
       a.href = url
-      a.download = `${baseName}_sdr.mp4`
+      a.download = `${originalName.replace(/\.[^.]+$/, '')}_sdr.mp4`
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      a.remove()
+      setCollected(true)
     } catch (e) {
       setFailed((e as Error).message)
+    } finally {
+      // Revoking immediately after click() can cancel the download in Safari,
+      // so the object URL is released on the next turn of the event loop.
+      if (url) setTimeout(() => URL.revokeObjectURL(url!), 1000)
+      setDownloading(false)
     }
-    setDownloading(false)
   }
 
   return (
@@ -39,9 +53,9 @@ export default function DownloadCard({ jobId, originalName }: Props) {
           </svg>
         </div>
         <div className="flex-1 text-center sm:text-left">
-          <p className="font-bold text-base" style={{ color: '#10b981' }}>Conversion Complete!</p>
+          <p className="font-bold text-base" style={{ color: '#10b981' }}>Conversion complete</p>
           <p className="text-sm mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            Your SDR video is ready to download
+            Your SDR video is ready — same resolution, BT.709 colour, audio intact.
           </p>
         </div>
         <button
@@ -72,10 +86,17 @@ export default function DownloadCard({ jobId, originalName }: Props) {
         </button>
       </div>
 
+      {/* The deadline matters — say it before they wander off, not after. */}
+      <p className="mt-4 text-xs text-center sm:text-left leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        {collected
+          ? 'Downloaded — that file has now been deleted from the server. Nothing about this conversion was kept.'
+          : `Download it now: the file is deleted the moment you do, and erased automatically within ${retentionMinutes} minutes either way.`}
+      </p>
+
       {failed && (
         <p className="mt-3 text-xs px-3 py-2.5 rounded-lg" role="alert"
           style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444' }}>
-          Download failed. {failed}
+          {failed}
         </p>
       )}
     </div>

@@ -1,8 +1,21 @@
 node_modules
 
-# Runtime job files
+# Runtime job files — user video, never committed
+backend/.data/
 backend/uploads/
 backend/outputs/
 
 # Build output
 frontend/dist/
+
+# Local configuration
+.env
+.env.local
+*.local
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

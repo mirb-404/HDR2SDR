@@ -32,10 +32,22 @@ const FLAGS = [
     color: '#f59e0b',
   },
   {
-    flag: '-c:v libx265 / CRF',
-    title: 'HEVC Encoding (libx265)',
-    desc: 'Encodes output as HEVC/H.265 using CRF (Constant Rate Factor). Lower CRF = better quality & larger file. CRF 22 is a good balance. Preset controls encoding speed vs compression efficiency.',
+    flag: '-c:v libx264 -crf 20',
+    title: 'H.264 Encoding (libx264)',
+    desc: 'Encodes the output as H.264 using CRF (Constant Rate Factor), where a lower number means higher quality and a larger file. CRF 20 sits just above the threshold where re-encoding becomes visible. H.264 is used rather than the smaller H.265 because H.265 does not play in Chrome or Firefox and breaks many video editors — a converted file you cannot open is not much of a conversion.',
     color: '#ef4444',
+  },
+  {
+    flag: '-color_primaries / -color_trc / -colorspace',
+    title: 'Colour Tagging',
+    desc: 'Writes BT.709 into the output\'s metadata for all three of primaries, transfer and matrix. Without these tags a player has to guess what colour space the file is in, and a wrong guess is the usual reason a converted video still looks grey, dull or oversaturated despite a correct tone-map.',
+    color: '#8b5cf6',
+  },
+  {
+    flag: '-movflags +faststart',
+    title: 'Faststart Muxing',
+    desc: 'Moves the MP4 index (the moov atom) to the front of the file. This lets a browser or phone begin playing the video while it is still downloading, instead of waiting for the whole thing to arrive first.',
+    color: '#0ea5e9',
   },
 ]
 

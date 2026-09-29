@@ -4,6 +4,9 @@ import OptionsPanel from './OptionsPanel'
 import ProgressBar from './ProgressBar'
 import DownloadCard from './DownloadCard'
 import FlagExplainer from './FlagExplainer'
+import QualityNotes from './QualityNotes'
+import PrivacyNotice from './PrivacyNotice'
+import { useServerConfig } from '../useServerConfig'
 
 type Stage = 'upload' | 'options' | 'converting' | 'done' | 'error'
 
@@ -15,58 +18,122 @@ interface ProgressState {
   duration: number
 }
 
+const IDLE_PROGRESS: ProgressState = { percent: 0, fps: 0, speed: '?', currentTime: 0, duration: 0 }
+
+/**
+ * Uploads via XHR rather than fetch purely because fetch still cannot report
+ * upload progress. On a phone sending a few hundred megabytes, a bar that moves
+ * is the difference between waiting and assuming the page has frozen.
+ */
+function uploadWithProgress(
+  file: File,
+  onProgress: (percent: number) => void,
+  register: (xhr: XMLHttpRequest) => void
+): Promise<{ jobId: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    register(xhr)
+    xhr.open('POST', '/api/upload')
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
+    }
+
+    xhr.onload = () => {
+      let body: { jobId?: string; error?: string } | null = null
+      try {
+        body = JSON.parse(xhr.responseText)
+      } catch {
+        /* a proxy returned an HTML error page rather than our JSON */
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body?.jobId) return resolve({ jobId: body.jobId })
+      if (xhr.status === 413) {
+        return reject(new Error(body?.error ?? 'That file is over the size limit.'))
+      }
+      if (xhr.status === 429) {
+        return reject(new Error(body?.error ?? 'Too many uploads. Please wait a few minutes.'))
+      }
+      reject(new Error(body?.error ?? `Upload failed (HTTP ${xhr.status}).`))
+    }
+
+    xhr.onerror = () => reject(new Error('The upload was interrupted. Check your connection and try again.'))
+    xhr.onabort = () => reject(new Error('Upload cancelled.'))
+
+    const formData = new FormData()
+    formData.append('video', file)
+    xhr.send(formData)
+  })
+}
+
 export default function ConverterApp() {
+  const config = useServerConfig()
+
   const [stage, setStage] = useState<Stage>('upload')
   const [file, setFile] = useState<File | null>(null)
   const [jobId, setJobId] = useState<string>('')
-  const [progress, setProgress] = useState<ProgressState>({ percent: 0, fps: 0, speed: '?', currentTime: 0, duration: 0 })
+  const [progress, setProgress] = useState<ProgressState>(IDLE_PROGRESS)
+  const [queuePosition, setQueuePosition] = useState(0)
   const [error, setError] = useState<string>('')
   const [uploading, setUploading] = useState(false)
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const [uploadPercent, setUploadPercent] = useState(0)
 
-  // Cleanup SSE on unmount
+  const eventSourceRef = useRef<EventSource | null>(null)
+  const xhrRef = useRef<XMLHttpRequest | null>(null)
+
   useEffect(() => {
     return () => {
       eventSourceRef.current?.close()
+      xhrRef.current?.abort()
     }
   }, [])
 
   const handleFileSelected = (f: File) => {
     setFile(f)
+    setError('')
     setStage('options')
   }
 
   const handleConvert = async () => {
     if (!file) return
 
-    // Step 1: Upload file
     setUploading(true)
-    setStage('options') // keep on options while uploading
+    setUploadPercent(0)
+    setError('')
+
     try {
-      const formData = new FormData()
-      formData.append('video', file)
-      const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData })
-      if (!uploadRes.ok) {
-        const err = await uploadRes.json()
-        throw new Error(err.error || 'Upload failed')
-      }
-      const { jobId: id } = await uploadRes.json()
+      const { jobId: id } = await uploadWithProgress(
+        file,
+        setUploadPercent,
+        (xhr) => { xhrRef.current = xhr }
+      )
+
       setJobId(id)
       setUploading(false)
       setStage('converting')
-      setProgress({ percent: 0, fps: 0, speed: '?', currentTime: 0, duration: 0 })
+      setProgress(IDLE_PROGRESS)
+      setQueuePosition(0)
 
-      // Step 2: Open SSE before triggering convert
+      // Subscribe before asking for the conversion, so no early progress event
+      // is missed. The server also replays the last event on connect, which
+      // covers a phone that slept and reconnected mid-encode.
       const es = new EventSource(`/api/progress/${id}`)
       eventSourceRef.current = es
+
       es.onmessage = (evt) => {
         const data = JSON.parse(evt.data)
+
         if (data.error) {
           setError(data.error)
           setStage('error')
           es.close()
           return
         }
+        if (data.queued) {
+          setQueuePosition(data.position ?? 0)
+          return
+        }
+
+        setQueuePosition(0)
         setProgress({
           percent: data.percent ?? 0,
           fps: data.fps ?? 0,
@@ -79,24 +146,24 @@ export default function ConverterApp() {
           es.close()
         }
       }
-      es.onerror = () => {
-        // SSE naturally closes when server ends after done; only error if not done
-        if (stage !== 'done') {
-          // ignore benign close
-        }
-      }
 
-      // Step 3: Trigger conversion
+      // The server ends the stream itself once a job finishes, so a close here
+      // is normal and must not be reported as a failure.
+      es.onerror = () => { /* stream closed — terminal state already handled above */ }
+
       const convertRes = await fetch('/api/convert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: id }),
       })
       if (!convertRes.ok) {
-        const err = await convertRes.json()
-        throw new Error(err.error || 'Conversion failed to start')
+        const body = await convertRes.json().catch(() => null)
+        throw new Error(body?.error ?? 'Could not start the conversion.')
       }
+      const { position } = await convertRes.json()
+      if (position > 1) setQueuePosition(position)
     } catch (e) {
+      eventSourceRef.current?.close()
       setError((e as Error).message)
       setStage('error')
       setUploading(false)
@@ -105,12 +172,16 @@ export default function ConverterApp() {
 
   const reset = () => {
     eventSourceRef.current?.close()
+    xhrRef.current?.abort()
+    xhrRef.current = null
     setStage('upload')
     setFile(null)
     setJobId('')
-    setProgress({ percent: 0, fps: 0, speed: '?', currentTime: 0, duration: 0 })
+    setProgress(IDLE_PROGRESS)
+    setQueuePosition(0)
     setError('')
     setUploading(false)
+    setUploadPercent(0)
   }
 
   return (
@@ -120,7 +191,7 @@ export default function ConverterApp() {
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium mb-2"
           style={{ background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', color: 'var(--accent-light)' }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-          HDR → BT.709 SDR via libx265
+          HDR → BT.709 SDR · Hable tone mapping
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>
           Convert{' '}
@@ -129,14 +200,15 @@ export default function ConverterApp() {
           </span>
         </h1>
         <p className="text-sm sm:text-base max-w-xl mx-auto" style={{ color: 'var(--text-secondary)' }}>
-          Upload your HDR video, and download a perfectly converted SDR MP4 using our fixed Hable tone-mapping pipeline.
+          Fix washed-out, grey HDR footage that will not play properly. Free, no sign-up,
+          and your file is deleted the moment it is converted.
         </p>
       </div>
 
       {/* Step indicator */}
       <div className="flex items-center justify-center gap-1.5 sm:gap-3 mb-4">
         {(['upload', 'options', 'converting', 'done'] as Stage[]).map((s, i) => {
-          const labels = ['Upload', 'Configure', 'Converting', 'Done']
+          const labels = ['Upload', 'Review', 'Converting', 'Done']
           const isActive = stage === s
           const isDone = ['upload', 'options', 'converting', 'done'].indexOf(stage) > i
           return (
@@ -167,7 +239,7 @@ export default function ConverterApp() {
 
           {/* Upload step */}
           {(stage === 'upload' || stage === 'options') && (
-            <UploadZone onFileSelected={handleFileSelected} />
+            <UploadZone onFileSelected={handleFileSelected} config={config} />
           )}
 
           {/* Options step */}
@@ -175,11 +247,27 @@ export default function ConverterApp() {
             <div className="fade-in-up space-y-6">
               <div className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center justify-between gap-3 mb-5">
-                  <h2 className="text-sm sm:text-base font-bold" style={{ color: 'var(--text-primary)' }}>Conversion Options</h2>
-                  <button onClick={reset} className="btn-secondary text-xs py-1.5 px-3 flex-shrink-0">← Start over</button>
+                  <h2 className="text-sm sm:text-base font-bold" style={{ color: 'var(--text-primary)' }}>What will happen to your file</h2>
+                  <button onClick={reset} disabled={uploading} className="btn-secondary text-xs py-1.5 px-3 flex-shrink-0">← Start over</button>
                 </div>
-                <OptionsPanel inputName={file.name} />
+                <OptionsPanel inputName={file.name} config={config} />
               </div>
+
+              {uploading && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span style={{ color: 'var(--text-secondary)' }}>Uploading…</span>
+                    <span className="mono font-bold" style={{ color: 'var(--accent-light)' }}>{uploadPercent}%</span>
+                  </div>
+                  <div className="progress-bar-track">
+                    <div className="progress-bar-fill" style={{ width: `${uploadPercent}%` }} />
+                  </div>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Your file is deleted as soon as the conversion finishes.
+                  </p>
+                </div>
+              )}
+
               <button
                 onClick={handleConvert}
                 disabled={uploading}
@@ -192,7 +280,7 @@ export default function ConverterApp() {
                       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" style={{ opacity: 0.25 }}/>
                       <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round"/>
                     </svg>
-                    Uploading…
+                    Uploading… {uploadPercent}%
                   </>
                 ) : (
                   <>
@@ -208,13 +296,17 @@ export default function ConverterApp() {
 
           {/* Converting */}
           {stage === 'converting' && (
-            <ProgressBar {...progress} />
+            <ProgressBar {...progress} queuePosition={queuePosition} />
           )}
 
           {/* Done */}
           {stage === 'done' && (
             <div className="space-y-4 fade-in-up">
-              <DownloadCard jobId={jobId} originalName={file?.name ?? 'video.mp4'} />
+              <DownloadCard
+                jobId={jobId}
+                originalName={file?.name ?? 'video.mp4'}
+                retentionMinutes={config.retentionMinutes}
+              />
               <button onClick={reset} className="btn-secondary w-full" id="convert-another-btn">
                 Convert another video
               </button>
@@ -223,23 +315,23 @@ export default function ConverterApp() {
 
           {/* Error */}
           {stage === 'error' && (
-            <div className="rounded-2xl p-4 sm:p-6 fade-in-up" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(239,68,68,0.2)' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ color: '#ef4444' }}>
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
-                    <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                    <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="font-bold text-sm" style={{ color: '#ef4444' }}>Conversion Failed</p>
-                  <p className="text-sm mt-1 break-words" style={{ color: 'var(--text-secondary)' }}>{error}</p>
-                  {error.toLowerCase().includes('ffmpeg') && (
-                    <p className="text-xs mt-2 px-3 py-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--text-muted)' }}>
-                      💡 Make sure FFmpeg is installed and available in your system PATH.
+            <div className="fade-in-up">
+              <div className="rounded-2xl p-4 sm:p-6" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(239,68,68,0.2)' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ color: '#ef4444' }}>
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+                      <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                      <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-sm" style={{ color: '#ef4444' }}>Conversion Failed</p>
+                    <p className="text-sm mt-1 break-words" style={{ color: 'var(--text-secondary)' }}>{error}</p>
+                    <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
+                      Whatever went wrong, your file has already been deleted from the server.
                     </p>
-                  )}
+                  </div>
                 </div>
               </div>
               <button onClick={reset} className="btn-secondary mt-4 w-full">Try again</button>
@@ -248,8 +340,9 @@ export default function ConverterApp() {
         </div>
       </div>
 
-      {/* Flag explainer */}
+      <QualityNotes config={config} />
       <FlagExplainer />
+      <PrivacyNotice config={config} />
     </div>
   )
 }

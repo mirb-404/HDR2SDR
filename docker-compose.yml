@@ -1,0 +1,39 @@
+services:
+  hdr2sdr:
+    build: .
+    image: hdr2sdr
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-500}"
+      MAX_CONCURRENT_JOBS: "${MAX_CONCURRENT_JOBS:-1}"
+      JOB_TTL_MINUTES: "${JOB_TTL_MINUTES:-15}"
+      VIDEO_CRF: "${VIDEO_CRF:-20}"
+      VIDEO_PRESET: "${VIDEO_PRESET:-fast}"
+      TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-1}"
+
+    # tmpfs, not a volume, on purpose: working files live in RAM and cannot
+    # outlive the container. Nothing to leave behind, nothing to back up by
+    # accident. Size it at roughly 3x the upload limit — an upload, its output,
+    # and headroom.
+    tmpfs:
+      - /data:size=2g,mode=0770,uid=1000,gid=1000
+
+    # FFmpeg will happily eat every core on the box. Capping it keeps the
+    # machine responsive when someone uploads a 4K file.
+    deploy:
+      resources:
+        limits:
+          cpus: "${CPU_LIMIT:-2}"
+          memory: ${MEMORY_LIMIT:-2g}
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

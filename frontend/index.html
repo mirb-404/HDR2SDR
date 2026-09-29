@@ -5,14 +5,43 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0a0f" />
-    <meta name="description" content="Convert HDR video to SDR with an FFmpeg Hable tone-mapping pipeline." />
+
+    <title>HDR2SDR — Free HDR to SDR Video Converter</title>
+    <meta
+      name="description"
+      content="Convert HDR video to SDR without losing quality. Free, no sign-up, and your file is deleted the moment it is converted. Hable filmic tone mapping via FFmpeg."
+    />
+
+    <!-- Open Graph / social previews. No third-party scripts are involved;
+         these are just tags a link preview reads. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="HDR2SDR — Free HDR to SDR Video Converter" />
+    <meta
+      property="og:description"
+      content="Fix washed-out HDR footage. Full resolution, filmic tone mapping, audio intact — and nothing is stored."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="HDR2SDR — Free HDR to SDR Video Converter" />
+    <meta
+      name="twitter:description"
+      content="Fix washed-out HDR footage. Full resolution, filmic tone mapping, audio intact — and nothing is stored."
+    />
+
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="HDR2SDR" />
-    <title>HDR2SDR — FFmpeg Tone Mapper</title>
+
+    <!-- Nothing to opt out of, but stated explicitly anyway. -->
+    <meta name="referrer" content="no-referrer" />
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; color: #f1f0fb; background: #0a0a0f; padding: 24px">
+        HDR2SDR needs JavaScript to upload and track a conversion. You can also run the
+        FFmpeg command yourself — see the README in the project repository.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

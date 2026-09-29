@@ -1,11 +1,26 @@
+import type { ServerConfig } from '../siteConfig'
+
 interface Props {
   inputName: string
+  config: ServerConfig
 }
 
-const FIXED_COMMAND = (name: string) => {
+const buildCommand = (name: string, config: ServerConfig) => {
   const base = name || 'video.mp4'
   const out = base.replace(/\.[^.]+$/, '') + '_sdr.mp4'
-  return `ffmpeg -i ${base} \\\n  -vf zscale=t=linear:npl=100,format=gbrpf32le,\\\n       zscale=p=bt709,\\\n       tonemap=tonemap=hable:desat=0,\\\n       zscale=t=bt709:m=bt709:r=tv,\\\n       format=yuv420p \\\n  -c:v libx265 \\\n  -crf 22 \\\n  -preset medium \\\n  -tune fastdecode \\\n  ${out}`
+  return [
+    `ffmpeg -i "${base}" \\`,
+    `  -vf zscale=t=linear:npl=100,\\`,
+    `      format=gbrpf32le,\\`,
+    `      zscale=p=bt709,\\`,
+    `      tonemap=tonemap=hable:desat=0,\\`,
+    `      zscale=t=bt709:m=bt709:r=tv,\\`,
+    `      format=yuv420p \\`,
+    `  -c:v libx264 -crf ${config.crf} -preset ${config.preset} \\`,
+    `  -color_primaries bt709 -color_trc bt709 -colorspace bt709 \\`,
+    `  -c:a aac -b:a 192k -movflags +faststart \\`,
+    `  "${out}"`,
+  ].join('\n')
 }
 
 const PIPELINE_STEPS = [
@@ -17,7 +32,14 @@ const PIPELINE_STEPS = [
   { flag: 'format=yuv420p',          label: 'YUV 4:2:0 SDR output',        color: '#ec4899' },
 ]
 
-export default function OptionsPanel({ inputName }: Props) {
+export default function OptionsPanel({ inputName, config }: Props) {
+  const encoderParams = [
+    { k: 'Codec', v: 'libx264 (H.264)' },
+    { k: 'CRF', v: String(config.crf) },
+    { k: 'Preset', v: config.preset },
+    { k: 'Audio', v: config.audio },
+  ]
+
   return (
     <div className="space-y-5">
       {/* Pipeline steps */}
@@ -44,12 +66,7 @@ export default function OptionsPanel({ inputName }: Props) {
 
       {/* Encoder params */}
       <div className="flex flex-wrap gap-2">
-        {[
-          { k: 'Codec', v: 'libx265 (HEVC)' },
-          { k: 'CRF', v: '22' },
-          { k: 'Preset', v: 'medium' },
-          { k: 'Tune', v: 'fastdecode' },
-        ].map(({ k, v }) => (
+        {encoderParams.map(({ k, v }) => (
           <div key={k} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs"
             style={{ background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.25)' }}>
             <span style={{ color: 'var(--text-muted)' }}>{k}:</span>
@@ -60,18 +77,18 @@ export default function OptionsPanel({ inputName }: Props) {
 
       {/* Full command preview */}
       <div>
-        <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Exact Command</p>
+        <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+          Exact command — run it yourself if you would rather not upload anything
+        </p>
         {/* Horizontal scroll is the right call for a command — wrapping it would
             make it uncopyable. -webkit-overflow-scrolling keeps iOS momentum. */}
         <div className="rounded-xl p-3 sm:p-4 overflow-x-auto"
           style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid var(--border)', WebkitOverflowScrolling: 'touch' }}>
           <pre className="mono text-[11px] sm:text-xs leading-6 whitespace-pre" style={{ color: '#a78bfa' }}>
-            {FIXED_COMMAND(inputName)}
+            {buildCommand(inputName, config)}
           </pre>
         </div>
       </div>
     </div>
   )
 }
-
-export type { }

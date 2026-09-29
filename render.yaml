@@ -1,0 +1,49 @@
+# Render blueprint — free tier.
+#
+# Deploy: push this repo to GitHub, then New → Blueprint on render.com and
+# point it at the repo. Render reads this file and needs nothing else.
+#
+# Free-tier facts worth knowing before you rely on it:
+#   - The instance sleeps after 15 minutes of no traffic, and the next visitor
+#     waits ~50s for a cold start.
+#   - You get a shared 0.1 CPU. FFmpeg is CPU-bound, so encodes are slow; the
+#     limits below are set low deliberately so jobs finish instead of timing out.
+#   - Disk is ephemeral. For this app that is a feature, not a problem.
+
+services:
+  - type: web
+    name: hdr2sdr
+    runtime: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /api/health
+    envVars:
+      # Render injects PORT and expects the app to bind it. server.js already does.
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /tmp/hdr2sdr
+      # Far smaller than the 500 MB default, because Render's free instance has
+      # 0.1 CPU and 512 MB RAM. Tone mapping is expensive; a 500 MB file here
+      # would outlast anyone's patience. Raise it on a paid instance or on a
+      # host with real cores (see DEPLOY.md).
+      - key: MAX_UPLOAD_MB
+        value: "150"
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: MAX_QUEUED_JOBS
+        value: "2"
+      - key: JOB_TTL_MINUTES
+        value: "15"
+      - key: FFMPEG_TIMEOUT_MINUTES
+        value: "20"
+      # 'veryfast' trades a little file size for roughly 2x the speed, which is
+      # the right trade when the CPU is this slow.
+      - key: VIDEO_PRESET
+        value: veryfast
+      - key: VIDEO_CRF
+        value: "20"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: FORCE_HSTS
+        value: "true"

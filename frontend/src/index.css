@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+/* No webfont import on purpose. Pulling Inter from fonts.googleapis.com would
+   send every visitor's IP address and User-Agent to Google before the page even
+   renders — which would make the "we collect nothing" promise on this site a
+   lie. The system stack below looks close enough and costs zero requests. */
 
 @import "tailwindcss";
 
@@ -26,7 +29,7 @@ html {
 }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   /* dvh tracks the collapsing mobile URL bar; vh is the fallback for old browsers */
@@ -79,7 +82,7 @@ button, a, [role='button'], label, input, select, textarea {
 
 /* Mono font for code */
 .mono {
-  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
 /* Input styles */
