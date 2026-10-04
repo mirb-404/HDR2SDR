@@ -233,12 +233,20 @@ app.post('/api/upload-url', rateLimit(UPLOAD_LIMIT, 'upload'), async (req, res) 
   if (!BLOB_CONFIGURED) {
     return res.status(503).json({ error: 'Storage is not configured on the server.' });
   }
+  // No upload-completed callback is ever registered, so the only event this
+  // route should see is the browser asking for a URL.
+  if (req.body?.type !== 'blob.generate-presigned-url') {
+    return res.status(400).json({ error: 'Invalid request.' });
+  }
   sweepStore();
 
   try {
     const result = await handleUploadPresigned({
       body: req.body,
       request: req,
+      // The SDK refuses to run without a key, even though it only uses it to
+      // verify completion callbacks, which the check above already rejects.
+      webhookPublicKey: process.env.BLOB_WEBHOOK_PUBLIC_KEY || 'unused',
       getSignedToken: async (pathname) => {
         if (!isUploadPathname(pathname)) throw new UserError('That file does not look like a video.');
 
