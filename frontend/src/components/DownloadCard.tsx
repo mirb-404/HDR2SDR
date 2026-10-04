@@ -1,12 +1,13 @@
 import { useState } from 'react'
+import type { ConvertedFile } from './ConverterApp'
 
 interface Props {
-  jobId: string
+  file: ConvertedFile
   originalName: string
   retentionMinutes: number
 }
 
-export default function DownloadCard({ jobId, originalName, retentionMinutes }: Props) {
+export default function DownloadCard({ file, originalName, retentionMinutes }: Props) {
   const [downloading, setDownloading] = useState(false)
   const [failed, setFailed] = useState('')
   const [collected, setCollected] = useState(false)
@@ -16,12 +17,25 @@ export default function DownloadCard({ jobId, originalName, retentionMinutes }: 
     setFailed('')
     let url: string | null = null
     try {
-      const res = await fetch(`/api/download/${jobId}`)
+      // A short-lived signed link straight to storage. Function responses are
+      // capped at 4.5 MB, so the video cannot come back through the API.
+      const res = await fetch(file.downloadUrl)
       if (!res.ok) {
-        const body = await res.json().catch(() => null)
-        throw new Error(body?.error ?? `Download failed (HTTP ${res.status}).`)
+        throw new Error(res.status === 403 || res.status === 404
+          ? 'That file is no longer available.'
+          : `Download failed (HTTP ${res.status}).`)
       }
       const blob = await res.blob()
+
+      // It is in this tab's memory now, so the stored copy can go. A failure
+      // here is not the user's problem: the retention timer deletes it anyway.
+      fetch('/api/discard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pathname: file.pathname }),
+        keepalive: true,
+      }).catch(() => {})
+
       url = URL.createObjectURL(blob)
 
       // The server sends a generic filename because it was never told the real

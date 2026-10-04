@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
+import { uploadPresigned } from '@vercel/blob/client'
 import UploadZone from './UploadZone'
 import OptionsPanel from './OptionsPanel'
-import ProgressBar from './ProgressBar'
+import ProgressBar, { type Phase } from './ProgressBar'
 import DownloadCard from './DownloadCard'
 import QualityNotes from './QualityNotes'
 import PrivacyNotice from './PrivacyNotice'
@@ -20,47 +21,120 @@ interface ProgressState {
   duration: number
 }
 
+interface ConvertEvent extends Partial<ProgressState> {
+  stage?: 'fetching' | 'saving'
+  waiting?: boolean
+  done?: boolean
+  error?: string
+  pathname?: string
+  downloadUrl?: string
+}
+
+export interface ConvertedFile {
+  pathname: string
+  downloadUrl: string
+}
+
 const IDLE_PROGRESS: ProgressState = { percent: 0, fps: 0, speed: '?', currentTime: 0, duration: 0 }
 
+const VIDEO_EXT = /\.(mp4|mkv|mov|m4v|webm|avi|ts|m2ts|mts|mxf|wmv|flv)$/i
+
+// Every encoder being busy is normal under load, not a failure. Retrying lets
+// the platform route the request to an instance with a free slot.
+const BUSY_RETRIES = 40
+
+function randomId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  // randomUUID is missing outside secure contexts, e.g. the dev server opened
+  // over a LAN address. Same format, built by hand.
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 /**
- * Uploads via XHR rather than fetch purely because fetch still cannot report
- * upload progress. On a phone sending a few hundred megabytes, a bar that moves
- * is the difference between waiting and assuming the page has frozen.
+ * Sends the video straight to storage. It never passes through the API: the
+ * server only signs a one-time upload URL for a random name, so the real
+ * filename stays in this tab.
  */
-function uploadWithProgress(
-  file: File,
-  onProgress: (percent: number) => void,
-  register: (xhr: XMLHttpRequest) => void
-): Promise<{ jobId: string }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    register(xhr)
-    xhr.open('POST', '/api/upload')
+async function uploadVideo(file: File, onProgress: (percent: number) => void, signal: AbortSignal) {
+  const ext = file.name.match(VIDEO_EXT)?.[0].toLowerCase() ?? '.mp4'
+  const pathname = `uploads/${randomId()}${ext}`
+  try {
+    await uploadPresigned(pathname, file, {
+      access: 'private',
+      handleUploadUrl: '/api/upload-url',
+      contentType: file.type.startsWith('video/') ? file.type : 'application/octet-stream',
+      // Parts upload in parallel and retry on their own, which matters on a
+      // phone connection that drops for a second halfway through.
+      multipart: file.size > 32 * 1024 * 1024,
+      abortSignal: signal,
+      onUploadProgress: (e) => onProgress(Math.round(e.percentage)),
+    })
+  } catch (e) {
+    if (signal.aborted) throw new Error('Upload cancelled.')
+    console.error(e)
+    throw new Error('The upload failed. Check your connection and try again.')
+  }
+  return pathname
+}
 
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
-    }
-
-    xhr.onload = () => {
-      let body: { jobId?: string; error?: string } | null = null
-      try {
-        body = JSON.parse(xhr.responseText)
-      } catch {
-        /* a proxy returned an HTML error page rather than our JSON */
-      }
-      if (xhr.status >= 200 && xhr.status < 300 && body?.jobId) return resolve({ jobId: body.jobId })
-      if (xhr.status === 413) return reject(new Error(body?.error ?? 'That file is over the size limit.'))
-      if (xhr.status === 429) return reject(new Error(body?.error ?? 'Too many uploads. Please wait a few minutes.'))
-      reject(new Error(body?.error ?? `Upload failed (HTTP ${xhr.status}).`))
-    }
-
-    xhr.onerror = () => reject(new Error('The upload was interrupted. Check your connection and try again.'))
-    xhr.onabort = () => reject(new Error('Upload cancelled.'))
-
-    const formData = new FormData()
-    formData.append('video', file)
-    xhr.send(formData)
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms)
+    signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('Cancelled.')) }, { once: true })
   })
+
+/**
+ * Runs the whole conversion as one streamed request and reports each NDJSON
+ * line. Resolves with the finished file, or throws with a message to show.
+ */
+async function convertVideo(
+  pathname: string,
+  onEvent: (e: ConvertEvent) => void,
+  signal: AbortSignal
+): Promise<ConvertedFile> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch('/api/convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pathname }),
+      signal,
+    })
+
+    if (!res.ok || !res.body) {
+      const body = await res.json().catch(() => null)
+      if (res.status === 503 && body?.busy && attempt < BUSY_RETRIES) {
+        onEvent({ waiting: true })
+        await sleep(Number(res.headers.get('Retry-After') ?? 5) * 1000, signal)
+        continue
+      }
+      if (res.status === 503 && body?.busy) throw new Error('The server is busy. Please try again in a few minutes.')
+      throw new Error(body?.error ?? `Could not start the conversion (HTTP ${res.status}).`)
+    }
+
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += value
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (!line.trim()) continue // heartbeat
+        const event: ConvertEvent = JSON.parse(line)
+        if (event.error) throw new Error(event.error)
+        if (event.done && event.pathname && event.downloadUrl) {
+          return { pathname: event.pathname, downloadUrl: event.downloadUrl }
+        }
+        onEvent(event)
+      }
+    }
+    throw new Error('The connection to the server was lost before the conversion finished.')
+  }
 }
 
 export default function ConverterApp() {
@@ -68,21 +142,19 @@ export default function ConverterApp() {
 
   const [stage, setStage] = useState<Stage>('upload')
   const [file, setFile] = useState<File | null>(null)
-  const [jobId, setJobId] = useState<string>('')
+  const [result, setResult] = useState<ConvertedFile | null>(null)
   const [progress, setProgress] = useState<ProgressState>(IDLE_PROGRESS)
-  const [queuePosition, setQueuePosition] = useState(0)
+  const [phase, setPhase] = useState<Phase>('fetching')
   const [error, setError] = useState<string>('')
   const [uploading, setUploading] = useState(false)
   const [uploadPercent, setUploadPercent] = useState(0)
 
-  const eventSourceRef = useRef<EventSource | null>(null)
-  const xhrRef = useRef<XMLHttpRequest | null>(null)
+  // One controller covers the upload and the conversion. Aborting it closes
+  // the request, which is the server's signal to kill FFmpeg and delete.
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    return () => {
-      eventSourceRef.current?.close()
-      xhrRef.current?.abort()
-    }
+    return () => abortRef.current?.abort()
   }, [])
 
   const handleFileSelected = (f: File) => {
@@ -94,72 +166,38 @@ export default function ConverterApp() {
   const handleConvert = async () => {
     if (!file) return
 
+    const controller = new AbortController()
+    abortRef.current = controller
     setUploading(true)
     setUploadPercent(0)
     setError('')
 
     try {
-      const { jobId: id } = await uploadWithProgress(file, setUploadPercent, (xhr) => {
-        xhrRef.current = xhr
-      })
+      const pathname = await uploadVideo(file, setUploadPercent, controller.signal)
 
-      setJobId(id)
       setUploading(false)
       setStage('converting')
+      setPhase('fetching')
       setProgress(IDLE_PROGRESS)
-      setQueuePosition(0)
 
-      // Subscribe before asking for the conversion so no early progress event
-      // is missed. The server also replays the last event on connect, which
-      // covers a phone that slept and reconnected mid encode.
-      const es = new EventSource(`/api/progress/${id}`)
-      eventSourceRef.current = es
-
-      es.onmessage = (evt) => {
-        const data = JSON.parse(evt.data)
-
-        if (data.error) {
-          setError(data.error)
-          setStage('error')
-          es.close()
-          return
-        }
-        if (data.queued) {
-          setQueuePosition(data.position ?? 0)
-          return
-        }
-
-        setQueuePosition(0)
+      const converted = await convertVideo(pathname, (event) => {
+        if (event.waiting) return setPhase('waiting')
+        if (event.stage) return setPhase(event.stage)
+        setPhase('encoding')
         setProgress({
-          percent: data.percent ?? 0,
-          fps: data.fps ?? 0,
-          speed: data.speed ?? '?',
-          currentTime: data.currentTime ?? 0,
-          duration: data.duration ?? 0,
+          percent: event.percent ?? 0,
+          fps: event.fps ?? 0,
+          speed: event.speed ?? '?',
+          currentTime: event.currentTime ?? 0,
+          duration: event.duration ?? 0,
         })
-        if (data.done) {
-          setStage('done')
-          es.close()
-        }
-      }
+      }, controller.signal)
 
-      // The server ends the stream itself once a job finishes, so a close here
-      // is normal and must not be reported as a failure.
-      es.onerror = () => { /* terminal states are already handled above */ }
-
-      const convertRes = await fetch('/api/convert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: id }),
-      })
-      if (!convertRes.ok) {
-        const body = await convertRes.json().catch(() => null)
-        throw new Error(body?.error ?? 'Could not start the conversion.')
-      }
-      const { position } = await convertRes.json()
-      if (position > 1) setQueuePosition(position)
+      setResult(converted)
+      setStage('done')
     } catch (e) {
-      eventSourceRef.current?.close()
+      // A reset or unmount aborted this run on purpose; there is nothing to report.
+      if (controller.signal.aborted) return
       setError((e as Error).message)
       setStage('error')
       setUploading(false)
@@ -167,14 +205,13 @@ export default function ConverterApp() {
   }
 
   const reset = () => {
-    eventSourceRef.current?.close()
-    xhrRef.current?.abort()
-    xhrRef.current = null
+    abortRef.current?.abort()
+    abortRef.current = null
     setStage('upload')
     setFile(null)
-    setJobId('')
+    setResult(null)
     setProgress(IDLE_PROGRESS)
-    setQueuePosition(0)
+    setPhase('fetching')
     setError('')
     setUploading(false)
     setUploadPercent(0)
@@ -270,12 +307,12 @@ export default function ConverterApp() {
               </div>
             )}
 
-            {stage === 'converting' && <ProgressBar {...progress} queuePosition={queuePosition} />}
+            {stage === 'converting' && <ProgressBar {...progress} phase={phase} />}
 
-            {stage === 'done' && (
+            {stage === 'done' && result && (
               <div>
                 <DownloadCard
-                  jobId={jobId}
+                  file={result}
                   originalName={file?.name ?? 'video.mp4'}
                   retentionMinutes={config.retentionMinutes}
                 />
