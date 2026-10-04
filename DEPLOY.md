@@ -5,8 +5,36 @@ every frame through 32 bit floating point maths and then re-encodes it, so "free
 hosting" becomes a question about how many CPU cores you get rather than about
 bandwidth or storage.
 
-Serverless hosts such as Vercel, Netlify and Cloudflare Pages are out. They have
-no FFmpeg, small upload limits, and timeouts measured in seconds.
+Every option stores uploads and results briefly in a **private Vercel Blob
+store**: the browser uploads straight to it and downloads straight from it, and
+the server deletes each file as soon as it is done with it. On Vercel the store
+is connected for you. On any other host, set `BLOB_READ_WRITE_TOKEN` (from the
+store's settings) in the environment.
+
+---
+
+## Vercel
+
+`vercel.json` deploys two services: the Vite frontend on `/`, and the API as a
+container (`backend/Dockerfile.vercel`, which installs FFmpeg) on `/api/*`.
+
+1. Import the repo on Vercel. It reads `vercel.json`; no framework settings needed.
+2. **Storage → Create → Blob**, access **Private**, connected to this project.
+   Include the Development environment if you want `vercel dev` to work.
+3. **Settings → Environment Variables**: add `PORT=3001`. Containers are
+   expected on port 80 otherwise.
+4. Redeploy so the new variables are picked up.
+
+**Limits that shape the defaults.** Each conversion is one request, so it must
+finish within the function's max duration: 300s on Hobby (1 vCPU), up to 800s
+on Pro (up to 2 vCPU). `Dockerfile.vercel` therefore defaults to a 200 MB upload
+cap and the `veryfast` preset, and stops FFmpeg 45s before the limit so the user
+gets a clear "too long" message instead of a timeout. A clip that runs out of
+time still costs CPU, so keep the cap honest for your plan. On Pro, raise the
+function's max duration and set `MAX_DURATION_SECONDS` to the same value.
+
+Each instance runs one encode at a time; a second request gets a 503 and the
+browser retries, which lets Vercel send it to another instance.
 
 ---
 

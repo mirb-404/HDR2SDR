@@ -59,8 +59,8 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
 // The function's maxDuration. A request still running at this point is killed
 // by the platform with a bare 504, so the encode is stopped a little earlier
 // to leave time to say why. Keep it equal to the duration set on Vercel:
-// 300 on Hobby, up to 800 on Pro.
-const MAX_DURATION_MS = num('MAX_DURATION_SECONDS', 300) * 1000;
+// 300 on Hobby, up to 800 on Pro. Unset on hosts with no request limit.
+const MAX_DURATION_MS = num('MAX_DURATION_SECONDS', Infinity) * 1000;
 // Time held back from the encode for storing the result and replying.
 const SAVE_RESERVE_MS = num('SAVE_RESERVE_SECONDS', 45) * 1000;
 
@@ -694,7 +694,9 @@ const server = app.listen(PORT, HOST, async () => {
   console.log(`HDR2SDR listening on ${HOST}:${PORT}`);
   console.log(`  Max upload:   ${formatBytes(MAX_UPLOAD_BYTES)}`);
   console.log(`  Retention:    ${Math.round(JOB_TTL_MS / 60000)} min, then deleted`);
-  console.log(`  Time budget:  ${MAX_DURATION_MS / 1000}s per request, ${SAVE_RESERVE_MS / 1000}s reserved to save`);
+  if (Number.isFinite(MAX_DURATION_MS)) {
+    console.log(`  Time budget:  ${MAX_DURATION_MS / 1000}s per request, ${SAVE_RESERVE_MS / 1000}s reserved to save`);
+  }
   console.log(`  Encoder:      libx264 crf ${VIDEO_CRF} preset ${VIDEO_PRESET}, ${FFMPEG_THREADS} thread(s)`);
 
   if (!BLOB_CONFIGURED) {
