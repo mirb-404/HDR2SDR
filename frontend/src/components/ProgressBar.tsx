@@ -4,7 +4,16 @@ interface Props {
   speed: string
   currentTime: number
   duration: number
-  queuePosition?: number
+  phase?: Phase
+}
+
+export type Phase = 'waiting' | 'fetching' | 'encoding' | 'saving'
+
+const TITLES: Record<Phase, string> = {
+  waiting: 'Waiting for a free encoder',
+  fetching: 'Getting your video ready',
+  encoding: 'Converting your video',
+  saving: 'Saving the result',
 }
 
 function formatDuration(secs: number) {
@@ -26,27 +35,27 @@ function estimateRemaining(currentTime: number, duration: number, speed: string)
   return formatDuration(secondsLeft)
 }
 
-export default function ProgressBar({ percent, speed, currentTime, duration, queuePosition = 0 }: Props) {
-  if (queuePosition > 1) {
+export default function ProgressBar({ percent, speed, currentTime, duration, phase = 'encoding' }: Props) {
+  if (phase === 'waiting') {
     return (
       <div className="py-10 text-center rise">
         <p className="text-lg font-bold" style={{ color: 'var(--text)' }}>
-          You are number {queuePosition} in the queue
+          {TITLES.waiting}
         </p>
         <p className="text-sm mt-2 max-w-sm mx-auto leading-relaxed" style={{ color: 'var(--text-2)' }}>
-          This server converts one video at a time so each one runs at full speed.
+          Each encoder converts one video at a time so it runs at full speed.
           Keep this tab open and yours will start on its own.
         </p>
       </div>
     )
   }
 
-  const remaining = estimateRemaining(currentTime, duration, speed)
+  const remaining = phase === 'encoding' ? estimateRemaining(currentTime, duration, speed) : null
 
   return (
     <div className="py-6 rise">
       <div className="flex items-baseline justify-between mb-3">
-        <span className="text-base font-bold" style={{ color: 'var(--text)' }}>Converting your video</span>
+        <span className="text-base font-bold" style={{ color: 'var(--text)' }}>{TITLES[phase]}</span>
         <span className="text-xl font-extrabold mono" style={{ color: 'var(--brand)' }}>{percent}%</span>
       </div>
 

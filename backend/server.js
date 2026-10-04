@@ -1,31 +1,45 @@
 /**
- * HDR2SDR: HDR to SDR video tone-mapping service.
+ * HDR2SDR: HDR to SDR video tone-mapping service, built for Vercel Functions.
+ *
+ * Shape of a conversion, and why:
+ *   1. The browser uploads straight to a *private* Vercel Blob store using a
+ *      short-lived presigned URL from POST /api/upload-url. Function request
+ *      bodies are capped at 4.5 MB, so the video can never pass through here.
+ *   2. POST /api/convert does everything else in ONE streamed request: pull the
+ *      upload to local disk, delete it from Blob, run FFmpeg, store the result,
+ *      and stream progress back as NDJSON. Functions scale out, so a job that
+ *      spanned several requests could land on instances that have never heard
+ *      of it. One request means one instance and no shared state.
+ *   3. The browser downloads the result with a presigned GET, then asks for it
+ *      to be deleted via POST /api/discard.
  *
  * Privacy model (this is a promise the code has to keep, not just marketing):
- *   - No database, no accounts, no cookies, no analytics, no third-party calls.
- *   - The original filename is never sent to or stored by the server. A job is
- *     a random UUID and nothing else; the browser remembers the name and uses
- *     it to name the download.
- *   - The upload is deleted the moment the encode finishes.
- *   - The result is deleted as soon as it is downloaded, and unconditionally
- *     after JOB_TTL_MS whether or not anyone came back for it.
- *   - Nothing about a request is written to disk. Client IPs are held in memory
- *     only, HMAC'd with a salt generated fresh at boot, purely to rate-limit.
+ *   - No database, no accounts, no cookies, no analytics.
+ *   - The original filename never leaves the browser. Blobs are named by a
+ *     random UUID; the browser renames the download itself.
+ *   - The upload is deleted from Blob the moment it is on the encoder's disk,
+ *     and from disk the moment FFmpeg exits.
+ *   - The result is deleted when the browser confirms the download, after
+ *     JOB_TTL_MS, or when the instance shuts down, whichever comes first. A
+ *     sweep of the store catches anything an instance crash left behind.
+ *   - Client IPs are held in memory only, HMAC'd with a per-boot salt, purely
+ *     to rate-limit.
  */
 
 const express = require('express');
-const multer = require('multer');
 const crypto = require('crypto');
-const { v4: uuidv4, validate: isUuid } = require('uuid');
+const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const fsp = require('fs/promises');
-const dgram = require('dgram');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const { spawn, execFile } = require('child_process');
+const { get, put, del, list, issueSignedToken, presignUrl } = require('@vercel/blob');
+const { handleUploadPresigned } = require('@vercel/blob/client');
 
 // ── Configuration ────────────────────────────────────────────────────────────
-// Every knob is an env var so the same image runs on a laptop and on a 512 MB
-// free-tier container without a code change. Defaults are tuned for free tiers.
 const num = (name, fallback) => {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -38,30 +52,51 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 const MAX_UPLOAD_BYTES = num('MAX_UPLOAD_MB', 500) * 1024 * 1024;
 const MAX_CONCURRENT_JOBS = num('MAX_CONCURRENT_JOBS', 1);
-const MAX_QUEUED_JOBS = num('MAX_QUEUED_JOBS', 3);
 const JOB_TTL_MS = num('JOB_TTL_MINUTES', 15) * 60 * 1000;
 const FFMPEG_TIMEOUT_MS = num('FFMPEG_TIMEOUT_MINUTES', 30) * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
+
+// The function's maxDuration. A request still running at this point is killed
+// by the platform with a bare 504, so the encode is stopped a little earlier
+// to leave time to say why. Keep it equal to the duration set on Vercel:
+// 300 on Hobby, up to 800 on Pro.
+const MAX_DURATION_MS = num('MAX_DURATION_SECONDS', 300) * 1000;
+// Time held back from the encode for storing the result and replying.
+const SAVE_RESERVE_MS = num('SAVE_RESERVE_SECONDS', 45) * 1000;
 
 const VIDEO_CRF = String(num('VIDEO_CRF', 20));
 const VIDEO_PRESET = process.env.VIDEO_PRESET || 'fast';
 const AUDIO_BITRATE = process.env.AUDIO_BITRATE || '192k';
 const FFMPEG_BIN = process.env.FFMPEG_PATH || 'ffmpeg';
+const FFMPEG_THREADS = String(num('FFMPEG_THREADS', allottedCpus()));
 
-// Uploads and outputs live here. Point DATA_DIR at a mounted volume (or /tmp on
-// an ephemeral host, where being wiped on restart is a feature here).
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '.data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const OUTPUTS_DIR = path.join(DATA_DIR, 'outputs');
 
-// Rate limits, per client, sliding window.
 const UPLOAD_LIMIT = { max: num('RATE_UPLOADS', 5), windowMs: 10 * 60 * 1000 };
 const API_LIMIT = { max: num('RATE_API', 120), windowMs: 60 * 1000 };
 
+const BLOB_CONFIGURED = Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
+
+/**
+ * CPUs this process may actually use. Inside a container, os.cpus() reports
+ * the host's cores, often dozens, while the cgroup quota grants one or two.
+ * x264 sizes its thread pool and frame buffers from that count, so trusting
+ * the host figure means far more threads than cores and several hundred MB of
+ * extra frame buffers on a 2 GB instance.
+ */
+function allottedCpus() {
+  try {
+    const [quota, period] = fs.readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim().split(/\s+/);
+    if (quota !== 'max') return Math.max(1, Math.ceil(Number(quota) / Number(period)));
+  } catch {
+    /* not cgroup v2, or not Linux */
+  }
+  return typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
+}
+
 const app = express();
-// Free hosts (Render, Fly, HF Spaces, Koyeb) and any nginx/Caddy setup put a
-// proxy in front, so req.ip must come from X-Forwarded-For or every client
-// looks like the proxy and shares one rate-limit bucket.
 app.set('trust proxy', num('TRUST_PROXY_HOPS', 1));
 app.disable('x-powered-by');
 app.use(express.json({ limit: '4kb' }));
@@ -71,16 +106,15 @@ for (const dir of [UPLOADS_DIR, OUTPUTS_DIR]) {
 }
 
 // ── Security headers ─────────────────────────────────────────────────────────
-// The page loads no third-party anything: no CDN, no fonts, no analytics, so
-// the CSP can be strict enough to prove it. 'unsafe-inline' for styles is the
-// one concession: the UI uses React inline `style` props throughout.
+// Only the browser's own uploads and downloads talk to Blob: uploads to the
+// control API on vercel.com, downloads from the store's own host.
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
-  "connect-src 'self'",
+  "connect-src 'self' https://vercel.com https://*.blob.vercel-storage.com",
   "font-src 'self'",
   "object-src 'none'",
   "frame-ancestors 'none'",
@@ -102,9 +136,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// The UI is served from this same origin, so no CORS header is needed at all.
-// ALLOWED_ORIGIN exists only for the case where someone hosts the frontend
-// separately; it is a single exact origin, never a wildcard.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
 if (ALLOWED_ORIGIN) {
   app.use((req, res, next) => {
@@ -120,14 +151,14 @@ if (ALLOWED_ORIGIN) {
 }
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-// Hand-rolled on purpose: it is ~25 lines, it adds no dependency to audit, and
-// it lets the IP be hashed before it is ever used as a key. The salt is random
-// per process, so the buckets are not even reversible to an IP after a restart.
+// Per instance, so on Vercel it slows abuse rather than stopping it outright.
+// The hard limits (file size, content type, link lifetime) are enforced by
+// Blob itself on every presigned URL.
 const IP_SALT = crypto.randomBytes(32);
 const clientKey = (req) =>
   crypto.createHmac('sha256', IP_SALT).update(req.ip || 'unknown').digest('base64');
 
-const buckets = new Map(); // key -> { hits: number[], }
+const buckets = new Map();
 
 function rateLimit({ max, windowMs }, scope) {
   return (req, res, next) => {
@@ -150,7 +181,6 @@ function rateLimit({ max, windowMs }, scope) {
   };
 }
 
-// Buckets are in-memory and must not grow without bound on a long-lived box.
 setInterval(() => {
   const now = Date.now();
   const longest = Math.max(UPLOAD_LIMIT.windowMs, API_LIMIT.windowMs);
@@ -161,300 +191,325 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-// ── Upload handling ──────────────────────────────────────────────────────────
-const ALLOWED_EXTENSIONS = new Set([
+// ── Blob naming ──────────────────────────────────────────────────────────────
+// The browser picks `uploads/<uuid><ext>` itself, so it never has to send the
+// real filename. Anything else is refused, which also stops a client from
+// pointing the converter at some other blob in the store.
+const ALLOWED_EXTENSIONS = [
   '.mp4', '.mkv', '.mov', '.m4v', '.webm', '.avi', '.ts', '.m2ts', '.mts', '.mxf', '.wmv', '.flv',
-]);
+];
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const UPLOAD_PATHNAME = new RegExp(
+  `^uploads/${UUID}(${ALLOWED_EXTENSIONS.map((e) => e.replace('.', '\\.')).join('|')})$`
+);
+const OUTPUT_PATHNAME = new RegExp(`^outputs/${UUID}\\.mp4$`);
+// Some browsers report no type at all for .mkv or .ts, so octet-stream is let
+// through as well. FFmpeg decides what the file really is either way.
+const UPLOAD_CONTENT_TYPES = ['video/*', 'application/octet-stream'];
+const UPLOAD_URL_TTL_MS = 30 * 60 * 1000;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    // The stored name is a fresh UUID plus a whitelisted extension. The user's
-    // filename never reaches the disk, and never reaches ffmpeg's argv.
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeExt = ALLOWED_EXTENSIONS.has(ext) ? ext : '.bin';
-    const jobId = uuidv4();
-    req.jobId = jobId;
-    cb(null, `${jobId}${safeExt}`);
-  },
-});
+const isUploadPathname = (p) => typeof p === 'string' && UPLOAD_PATHNAME.test(p);
+const isOutputPathname = (p) => typeof p === 'string' && OUTPUT_PATHNAME.test(p);
 
-const upload = multer({
-  storage,
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 4 },
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const looksLikeVideo = /^video\//.test(file.mimetype) || ALLOWED_EXTENSIONS.has(ext);
-    if (looksLikeVideo) return cb(null, true);
-    cb(new Error('That file does not look like a video.'));
-  },
-});
+const safeUnlink = (file) => fsp.unlink(file).catch(() => {});
+const safeDelBlob = (pathname) =>
+  del(pathname).catch((err) => console.error('[blob] delete failed:', err.message));
 
-// ── Job state ────────────────────────────────────────────────────────────────
-// jobs: id -> { state, inputPath, outputPath, createdAt, child, lastEvent }
-// state: 'ready' | 'queued' | 'converting' | 'done' | 'failed'
-// Note what is NOT in here: no filename, no IP, no user agent, no timestamps
-// beyond the TTL clock. There is nothing to leak.
-const jobs = new Map();
-const sseClients = new Map(); // jobId -> res
-const queue = [];
+// An Error whose message is fit to show the user as is.
+class UserError extends Error {}
+
+// ── State (per instance) ─────────────────────────────────────────────────────
+// Nothing here has to survive the instance: it is only what this instance is
+// doing right now, so it can clean up after itself on SIGTERM.
+const jobs = new Map(); // jobId -> { controller, child, uploadPathname, outputPathname }
+const pendingOutputs = new Map(); // output pathname -> expiry timer
 let activeJobs = 0;
 let shuttingDown = false;
 
-const safeUnlink = (file) => fsp.unlink(file).catch(() => {});
-
-async function destroyJob(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return;
-  jobs.delete(jobId);
-
-  const index = queue.indexOf(jobId);
-  if (index !== -1) queue.splice(index, 1);
-
-  if (job.child && !job.child.killed) {
-    job.child.kill('SIGKILL');
+// ── POST /api/upload-url ─────────────────────────────────────────────────────
+// Hands the browser a presigned URL to upload one file to one exact pathname.
+// Blob enforces the size cap and content type, so this route never sees bytes.
+app.post('/api/upload-url', rateLimit(UPLOAD_LIMIT, 'upload'), async (req, res) => {
+  if (!BLOB_CONFIGURED) {
+    return res.status(503).json({ error: 'Storage is not configured on the server.' });
   }
-  if (job.timer) clearTimeout(job.timer);
+  sweepStore();
 
-  await Promise.all([safeUnlink(job.inputPath), safeUnlink(job.outputPath)]);
+  try {
+    const result = await handleUploadPresigned({
+      body: req.body,
+      request: req,
+      getSignedToken: async (pathname) => {
+        if (!isUploadPathname(pathname)) throw new UserError('That file does not look like a video.');
 
-  const client = sseClients.get(jobId);
-  if (client) {
-    sseClients.delete(jobId);
-    client.end();
-  }
-}
-
-function emit(jobId, payload) {
-  const job = jobs.get(jobId);
-  // Remember the last event so a browser that connects late, or reconnects
-  // after the phone slept, is told the current state instead of hanging on an
-  // empty stream forever.
-  if (job) job.lastEvent = payload;
-  const client = sseClients.get(jobId);
-  if (client) client.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-// ── POST /api/upload ─────────────────────────────────────────────────────────
-app.post(
-  '/api/upload',
-  rateLimit(UPLOAD_LIMIT, 'upload'),
-  (req, res, next) => {
-    // Reject an oversized body before a single byte is written to disk, rather
-    // than letting multer buffer 4 GB and then complain.
-    const declared = Number(req.headers['content-length']);
-    if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES + 1024 * 1024) {
-      return res.status(413).json({
-        error: `That file is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} limit.`,
-      });
-    }
-    next();
-  },
-  (req, res) => {
-    upload.single('video')(req, res, async (err) => {
-      if (err) {
-        if (req.file) await safeUnlink(req.file.path);
-        const tooBig = err.code === 'LIMIT_FILE_SIZE';
-        return res.status(tooBig ? 413 : 400).json({
-          error: tooBig
-            ? `That file is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} limit.`
-            : err.message || 'Upload failed.',
-        });
-      }
-      if (!req.file) return res.status(400).json({ error: 'No file received.' });
-
-      const jobId = req.jobId;
-      jobs.set(jobId, {
-        state: 'ready',
-        inputPath: req.file.path,
-        outputPath: path.join(OUTPUTS_DIR, `${jobId}.mp4`),
-        createdAt: Date.now(),
-        child: null,
-        lastEvent: null,
-      });
-
-      // Deliberately returns the job id and nothing else. The server has no
-      // opinion about what this file is called.
-      res.json({ jobId, expiresInMinutes: Math.round(JOB_TTL_MS / 60000) });
+        const validUntil = Date.now() + UPLOAD_URL_TTL_MS;
+        const limits = {
+          maximumSizeInBytes: MAX_UPLOAD_BYTES,
+          allowedContentTypes: UPLOAD_CONTENT_TYPES,
+        };
+        const token = await issueSignedToken({ pathname, operations: ['put'], validUntil, ...limits });
+        return {
+          token,
+          urlOptions: {
+            ...limits,
+            validUntil,
+            addRandomSuffix: false,
+            allowOverwrite: false,
+            // The shortest Blob allows, so no copy lingers in the CDN cache.
+            cacheControlMaxAge: 60,
+          },
+        };
+      },
+    });
+    res.json(result);
+  } catch (err) {
+    if (!(err instanceof UserError)) console.error('[upload-url]', err.message);
+    res.status(400).json({
+      error: err instanceof UserError ? err.message : 'Could not prepare the upload.',
     });
   }
-);
-
-// ── POST /api/convert ────────────────────────────────────────────────────────
-app.post('/api/convert', rateLimit(API_LIMIT, 'api'), (req, res) => {
-  const { jobId } = req.body || {};
-  if (typeof jobId !== 'string' || !isUuid(jobId)) {
-    return res.status(400).json({ error: 'Invalid job id.' });
-  }
-
-  const job = jobs.get(jobId);
-  if (!job) return res.status(404).json({ error: 'Job not found. It may have expired.' });
-
-  // Without this guard, replaying the request spawns a second ffmpeg writing to
-  // the same output file, which is both a corruption bug and a free DoS.
-  if (job.state !== 'ready') {
-    return res.status(409).json({ error: `Job is already ${job.state}.` });
-  }
-
-  if (queue.length >= MAX_QUEUED_JOBS) {
-    return res.status(429).json({ error: 'The server is busy. Please try again in a few minutes.' });
-  }
-
-  job.state = 'queued';
-  queue.push(jobId);
-  res.json({ status: 'queued', position: queue.length });
-  drainQueue();
 });
 
-function drainQueue() {
-  // Killing a job during shutdown fires its close handler, which lands back
-  // here. Without this guard that would start a fresh encode on a process that
-  // is about to exit, leaving an orphaned ffmpeg and an undeleted upload.
-  if (shuttingDown) return;
-
-  while (activeJobs < MAX_CONCURRENT_JOBS && queue.length > 0) {
-    startConversion(queue.shift());
+// ── POST /api/convert ────────────────────────────────────────────────────────
+// Streams NDJSON: progress lines, then exactly one { done } or { error } line.
+app.post('/api/convert', rateLimit(API_LIMIT, 'api'), async (req, res) => {
+  const startedAt = Date.now();
+  const { pathname } = req.body || {};
+  if (!isUploadPathname(pathname)) return res.status(400).json({ error: 'Invalid upload.' });
+  if (!BLOB_CONFIGURED) {
+    return res.status(503).json({ error: 'Storage is not configured on the server.' });
   }
-  // Tell whoever is still waiting where they now stand.
-  queue.forEach((id, i) => emit(id, { queued: true, position: i + 1 }));
-}
 
-function startConversion(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return drainQueue();
+  // FFmpeg already uses every core this instance has. A second encode would
+  // only halve the speed of both and push both past the duration limit, so
+  // the browser is told to retry and will usually be routed elsewhere.
+  if (shuttingDown || activeJobs >= MAX_CONCURRENT_JOBS) {
+    res.setHeader('Retry-After', '5');
+    return res.status(503).json({ error: 'The server is busy.', busy: true });
+  }
 
-  job.state = 'converting';
   activeJobs++;
+  sweepStore();
 
-  // The tone-mapping chain, unchanged: linear light, float32 math, BT.2020 to
-  // BT.709 gamut, Hable filmic curve, then BT.709 gamma at TV range.
-  const filter = [
-    'zscale=t=linear:npl=100',
-    'format=gbrpf32le',
-    'zscale=p=bt709',
-    'tonemap=tonemap=hable:desat=0',
-    'zscale=t=bt709:m=bt709:r=tv',
-    'format=yuv420p',
-  ].join(',');
+  const jobId = uuidv4();
+  const controller = new AbortController();
+  const job = {
+    controller,
+    child: null,
+    uploadPathname: pathname,
+    outputPathname: null,
+    inputPath: path.join(UPLOADS_DIR, `${jobId}${path.extname(pathname)}`),
+    outputPath: path.join(OUTPUTS_DIR, `${jobId}.mp4`),
+  };
+  jobs.set(jobId, job);
 
-  const args = [
-    '-hide_banner', '-nostdin', '-y',
-    '-i', job.inputPath,
-    '-map', '0:v:0', '-map', '0:a:0?',
-    '-vf', filter,
-    '-c:v', 'libx264',
-    '-crf', VIDEO_CRF,
-    '-preset', VIDEO_PRESET,
-    '-pix_fmt', 'yuv420p',
-    // Tag the output with the colour space it is actually in. Without these a
-    // player has to guess, and a wrong guess undoes the tone-map's accuracy.
-    '-color_primaries', 'bt709',
-    '-color_trc', 'bt709',
-    '-colorspace', 'bt709',
-    '-c:a', 'aac', '-b:a', AUDIO_BITRATE,
-    '-movflags', '+faststart',
-    '-max_muxing_queue_size', '1024',
-    '-progress', 'pipe:1',
-    job.outputPath,
-  ];
+  res.status(200);
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-store, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
 
-  const child = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  job.child = child;
+  const send = (payload) => {
+    if (!res.writableEnded) res.write(`${JSON.stringify(payload)}\n`);
+  };
+  // Proxies drop connections that go quiet, and a long download or a slow
+  // first frame can be quiet for a while. A blank line is ignored by the client.
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write('\n');
+  }, 15000);
 
-  let duration = 0;
-  let stderrTail = '';
-  let settled = false;
-
-  // A hung or absurdly long encode must not pin the only worker slot forever.
-  job.timer = setTimeout(() => {
-    if (!child.killed) child.kill('SIGKILL');
-  }, FFMPEG_TIMEOUT_MS);
-
-  // ffmpeg writes the duration banner to stderr; -progress gives clean
-  // key=value pairs on stdout. Parsing each from the stream that formats it
-  // properly beats regexing the human-readable log for both.
-  child.stderr.on('data', (chunk) => {
-    const text = chunk.toString();
-    if (duration === 0) {
-      const m = text.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
-      if (m) duration = +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]);
-    }
-    stderrTail = (stderrTail + text).slice(-4000);
+  // The tab was closed or the user started over. Stop paying for the encode.
+  let finished = false;
+  res.on('close', () => {
+    if (!finished) controller.abort();
   });
 
-  let progressBuf = '';
-  child.stdout.on('data', (chunk) => {
-    progressBuf += chunk.toString();
-    const blocks = progressBuf.split('\n');
-    progressBuf = blocks.pop() ?? '';
+  try {
+    send({ stage: 'fetching' });
+    await fetchUpload(pathname, job.inputPath, controller.signal);
 
-    let out = null;
-    let fps = null;
-    let speed = null;
-    for (const line of blocks) {
-      const [key, value] = line.split('=');
-      if (key === 'out_time_us') out = Number(value) / 1e6;
-      else if (key === 'fps') fps = Number(value);
-      else if (key === 'speed') speed = value?.trim();
-    }
-    if (out === null || !Number.isFinite(out)) return;
+    // The original is on local disk now, so it leaves the store immediately.
+    await safeDelBlob(pathname);
+    job.uploadPathname = null;
 
-    emit(jobId, {
-      percent: duration > 0 ? Math.min(Math.round((out / duration) * 100), 99) : 0,
-      fps: Number.isFinite(fps) ? fps : 0,
-      speed: speed && speed !== 'N/A' ? speed : '?',
-      currentTime: out,
-      duration,
-    });
-  });
-
-  const finish = async (payload) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(job.timer);
-    activeJobs--;
-
-    // The source video is the sensitive artefact. It goes the instant ffmpeg is
-    // done with it, whether the encode succeeded or not.
+    const deadline = startedAt + MAX_DURATION_MS - SAVE_RESERVE_MS;
+    await encode(job, deadline, send);
     await safeUnlink(job.inputPath);
 
-    if (payload.error) {
-      job.state = 'failed';
-      await safeUnlink(job.outputPath);
-    } else {
-      job.state = 'done';
-    }
-
-    emit(jobId, payload);
-    const client = sseClients.get(jobId);
-    if (client) {
-      sseClients.delete(jobId);
-      client.end();
-    }
-    drainQueue();
-  };
-
-  child.on('error', (err) => {
-    const missing = err.code === 'ENOENT';
-    finish({
-      error: missing
-        ? 'The video encoder is unavailable on the server. Please try again later.'
-        : 'Conversion failed to start.',
+    send({ stage: 'saving', percent: 100 });
+    const outputPathname = `outputs/${jobId}.mp4`;
+    job.outputPathname = outputPathname;
+    await put(outputPathname, fs.createReadStream(job.outputPath), {
+      access: 'private',
+      contentType: 'video/mp4',
+      multipart: true,
+      addRandomSuffix: false,
+      cacheControlMaxAge: 60,
+      abortSignal: controller.signal,
     });
-    if (missing) console.error('[fatal] ffmpeg binary not found. Set FFMPEG_PATH or install ffmpeg.');
-  });
+    if (controller.signal.aborted) throw new UserError('Cancelled.');
 
-  child.on('close', (code, signal) => {
-    if (code === 0) return finish({ percent: 100, done: true });
-    if (signal === 'SIGKILL') {
-      return finish({ error: 'Conversion took too long and was stopped. Try a shorter clip.' });
+    expireOutput(outputPathname);
+    job.outputPathname = null;
+
+    send({
+      done: true,
+      percent: 100,
+      pathname: outputPathname,
+      downloadUrl: await presignDownload(outputPathname),
+      expiresInMinutes: Math.round(JOB_TTL_MS / 60000),
+    });
+  } catch (err) {
+    if (!(err instanceof UserError) && !controller.signal.aborted) {
+      console.error('[convert]', err.message);
     }
-    finish({ error: describeFailure(stderrTail) });
+    send({
+      error: err instanceof UserError ? err.message : 'Conversion failed. Please try again.',
+    });
+  } finally {
+    finished = true;
+    clearInterval(heartbeat);
+    jobs.delete(jobId);
+    activeJobs--;
+    await Promise.all([
+      safeUnlink(job.inputPath),
+      safeUnlink(job.outputPath),
+      job.uploadPathname && safeDelBlob(job.uploadPathname),
+      job.outputPathname && safeDelBlob(job.outputPathname),
+    ]);
+    res.end();
+  }
+});
+
+async function fetchUpload(pathname, dest, signal) {
+  // useCache: false reads from origin, so the video is never copied into the
+  // CDN cache on the way here.
+  const result = await get(pathname, { access: 'private', useCache: false, abortSignal: signal });
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new UserError('That upload has expired. Please upload it again.');
+  }
+  if (result.blob.size && result.blob.size > MAX_UPLOAD_BYTES) {
+    throw new UserError(`That file is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} limit.`);
+  }
+  await pipeline(Readable.fromWeb(result.stream), fs.createWriteStream(dest), { signal });
+}
+
+function encode(job, deadline, send) {
+  return new Promise((resolve, reject) => {
+    // The tone-mapping chain, unchanged: linear light, float32 math, BT.2020 to
+    // BT.709 gamut, Hable filmic curve, then BT.709 gamma at TV range.
+    const filter = [
+      'zscale=t=linear:npl=100',
+      'format=gbrpf32le',
+      'zscale=p=bt709',
+      'tonemap=tonemap=hable:desat=0',
+      'zscale=t=bt709:m=bt709:r=tv',
+      'format=yuv420p',
+    ].join(',');
+
+    const args = [
+      '-hide_banner', '-nostdin', '-y',
+      '-filter_threads', FFMPEG_THREADS,
+      '-i', job.inputPath,
+      '-map', '0:v:0', '-map', '0:a:0?',
+      '-vf', filter,
+      '-c:v', 'libx264',
+      '-crf', VIDEO_CRF,
+      '-preset', VIDEO_PRESET,
+      '-threads', FFMPEG_THREADS,
+      '-pix_fmt', 'yuv420p',
+      '-color_primaries', 'bt709',
+      '-color_trc', 'bt709',
+      '-colorspace', 'bt709',
+      '-c:a', 'aac', '-b:a', AUDIO_BITRATE,
+      '-movflags', '+faststart',
+      '-max_muxing_queue_size', '1024',
+      '-progress', 'pipe:1',
+      job.outputPath,
+    ];
+
+    const child = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    job.child = child;
+
+    let duration = 0;
+    let stderrTail = '';
+    let stopReason = null;
+
+    const stop = (reason) => {
+      stopReason = stopReason || reason;
+      if (!child.killed) child.kill('SIGKILL');
+    };
+
+    // Whichever comes first: the platform's duration limit or our own cap.
+    const budget = Math.min(FFMPEG_TIMEOUT_MS, deadline - Date.now());
+    const timer = setTimeout(() => stop('timeout'), Math.max(budget, 0));
+    const onAbort = () => stop('aborted');
+    job.controller.signal.addEventListener('abort', onAbort, { once: true });
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      if (duration === 0) {
+        const m = text.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+        if (m) duration = +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]);
+      }
+      stderrTail = (stderrTail + text).slice(-4000);
+    });
+
+    let progressBuf = '';
+    child.stdout.on('data', (chunk) => {
+      progressBuf += chunk.toString();
+      const blocks = progressBuf.split('\n');
+      progressBuf = blocks.pop() ?? '';
+
+      let out = null;
+      let fps = null;
+      let speed = null;
+      for (const line of blocks) {
+        const [key, value] = line.split('=');
+        if (key === 'out_time_us') out = Number(value) / 1e6;
+        else if (key === 'fps') fps = Number(value);
+        else if (key === 'speed') speed = value?.trim();
+      }
+      if (out === null || !Number.isFinite(out)) return;
+
+      send({
+        percent: duration > 0 ? Math.min(Math.round((out / duration) * 100), 99) : 0,
+        fps: Number.isFinite(fps) ? fps : 0,
+        speed: speed && speed !== 'N/A' ? speed : '?',
+        currentTime: out,
+        duration,
+      });
+    });
+
+    const settle = (err) => {
+      clearTimeout(timer);
+      job.controller.signal.removeEventListener('abort', onAbort);
+      job.child = null;
+      if (err) reject(err);
+      else resolve();
+    };
+
+    child.on('error', (err) => {
+      if (err.code === 'ENOENT') {
+        console.error('[fatal] ffmpeg binary not found. Set FFMPEG_PATH or install ffmpeg.');
+        return settle(new UserError('The video encoder is unavailable on the server. Please try again later.'));
+      }
+      settle(new UserError('Conversion failed to start.'));
+    });
+
+    child.on('close', (code) => {
+      if (code === 0 && !stopReason) return settle();
+      if (stopReason === 'aborted') return settle(new UserError('Cancelled.'));
+      if (stopReason === 'timeout') {
+        return settle(new UserError(
+          'This video is too long to convert within the server time limit. Try a shorter clip.'
+        ));
+      }
+      settle(new UserError(describeFailure(stderrTail)));
+    });
   });
 }
 
-// Turn ffmpeg's last words into something a person can act on, without echoing
-// server paths back to the browser.
 function describeFailure(stderrTail) {
   const tail = stderrTail.replace(new RegExp(escapeRegExp(DATA_DIR), 'g'), '');
   if (/Invalid data found|moov atom not found|does not contain any stream/i.test(tail)) {
@@ -471,69 +526,49 @@ function describeFailure(stderrTail) {
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// ── GET /api/progress/:jobId (SSE) ───────────────────────────────────────────
-app.get('/api/progress/:jobId', (req, res) => {
-  const { jobId } = req.params;
-  if (!isUuid(jobId)) return res.status(400).end();
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  // nginx buffers proxied responses by default, which holds every progress
-  // event back until the encode ends. This header turns that off.
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-
-  const existing = sseClients.get(jobId);
-  if (existing && existing !== res) existing.end();
-  sseClients.set(jobId, res);
-
-  const job = jobs.get(jobId);
-  if (!job) {
-    res.write(`data: ${JSON.stringify({ error: 'Job not found. It may have expired.' })}\n\n`);
-    sseClients.delete(jobId);
-    return res.end();
-  }
-  if (job.lastEvent) res.write(`data: ${JSON.stringify(job.lastEvent)}\n\n`);
-
-  // Free hosts and reverse proxies drop connections that go quiet. A comment
-  // line every 15s keeps the stream alive through a slow encode without
-  // showing up as an event in the browser.
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
-
-  req.on('close', () => {
-    clearInterval(heartbeat);
-    if (sseClients.get(jobId) === res) sseClients.delete(jobId);
+// A GET link for exactly one blob, valid no longer than the blob itself.
+async function presignDownload(pathname) {
+  const validUntil = Date.now() + JOB_TTL_MS;
+  const token = await issueSignedToken({ pathname, operations: ['get'], validUntil });
+  const { presignedUrl } = await presignUrl(token, {
+    operation: 'get',
+    pathname,
+    access: 'private',
+    validUntil,
+    useCache: false,
   });
-  res.on('close', () => clearInterval(heartbeat));
-});
+  return presignedUrl;
+}
 
-// ── GET /api/download/:jobId ─────────────────────────────────────────────────
-app.get('/api/download/:jobId', rateLimit(API_LIMIT, 'api'), (req, res) => {
-  const { jobId } = req.params;
-  if (!isUuid(jobId)) return res.status(400).json({ error: 'Invalid job id.' });
+// Deletes a finished result after the TTL even if nobody comes back for it.
+function expireOutput(pathname) {
+  const timer = setTimeout(() => {
+    pendingOutputs.delete(pathname);
+    safeDelBlob(pathname);
+  }, JOB_TTL_MS);
+  timer.unref();
+  pendingOutputs.set(pathname, timer);
+}
 
-  const job = jobs.get(jobId);
-  if (!job || job.state !== 'done') {
-    return res.status(404).json({ error: 'That file is no longer available.' });
+// ── POST /api/discard ────────────────────────────────────────────────────────
+// Called by the browser once the download has landed. The pathname is a
+// random UUID that only that browser was ever told, so knowing it is the
+// permission. Usually reaches a different instance than the one that made the
+// file; the timer there finds the blob already gone, which is harmless.
+app.post('/api/discard', rateLimit(API_LIMIT, 'api'), async (req, res) => {
+  const { pathname } = req.body || {};
+  if (!isOutputPathname(pathname)) return res.status(400).json({ error: 'Invalid file.' });
+
+  const timer = pendingOutputs.get(pathname);
+  if (timer) {
+    clearTimeout(timer);
+    pendingOutputs.delete(pathname);
   }
-
-  res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Cache-Control', 'no-store');
-  // A generic name on purpose: the browser knows the original and renames the
-  // download itself, so the server never has to be told what the file is.
-  res.setHeader('Content-Disposition', 'attachment; filename="converted_sdr.mp4"');
-
-  res.sendFile(job.outputPath, (err) => {
-    // Delete on success only. A half-finished download deserves a retry, and
-    // the TTL sweeper will take it soon enough regardless.
-    if (!err) destroyJob(jobId);
-  });
+  await safeDelBlob(pathname);
+  res.json({ ok: true });
 });
 
 // ── GET /api/config ──────────────────────────────────────────────────────────
-// The UI reads its limits from here so the number shown on the upload zone can
-// never drift away from the number the server actually enforces.
 app.get('/api/config', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.json({
@@ -550,22 +585,39 @@ app.get('/api/config', (req, res) => {
 // ── GET /api/health ──────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ ok: true, active: activeJobs, queued: queue.length });
+  res.json({ ok: true, active: activeJobs, storage: BLOB_CONFIGURED });
 });
 
-// ── Retention sweeper ────────────────────────────────────────────────────────
-// The download handler deletes on the happy path. This is what makes the
-// "deleted automatically" promise true on every other path: the tab was closed,
-// the encode failed, the process restarted, nobody ever came back.
-async function sweep() {
+// ── Retention sweeps ─────────────────────────────────────────────────────────
+// Every path above deletes its own files. These catch what is left when an
+// instance dies without warning: blobs older than the TTL, and stray local
+// files. The store sweep piggybacks on real traffic, at most once a minute per
+// instance, so an idle site costs nothing.
+let lastStoreSweep = 0;
+
+function sweepStore() {
+  const now = Date.now();
+  if (!BLOB_CONFIGURED || now - lastStoreSweep < SWEEP_INTERVAL_MS) return;
+  lastStoreSweep = now;
+
+  (async () => {
+    const cutoff = now - JOB_TTL_MS;
+    for (const prefix of ['uploads/', 'outputs/']) {
+      let cursor;
+      do {
+        const page = await list({ prefix, cursor, limit: 1000 });
+        const stale = page.blobs
+          .filter((b) => new Date(b.uploadedAt).getTime() < cutoff)
+          .map((b) => b.url);
+        if (stale.length) await del(stale);
+        cursor = page.hasMore ? page.cursor : undefined;
+      } while (cursor);
+    }
+  })().catch((err) => console.error('[sweep]', err.message));
+}
+
+async function sweepDisk() {
   const cutoff = Date.now() - JOB_TTL_MS;
-
-  for (const [jobId, job] of jobs) {
-    if (job.createdAt < cutoff) await destroyJob(jobId);
-  }
-
-  // Orphans: files older than the TTL with no job behind them, e.g. left on
-  // disk by a process that was killed mid-encode.
   for (const dir of [UPLOADS_DIR, OUTPUTS_DIR]) {
     let entries = [];
     try {
@@ -585,15 +637,15 @@ async function sweep() {
   }
 }
 
-setInterval(() => { sweep().catch(() => {}); }, SWEEP_INTERVAL_MS).unref();
+setInterval(() => { sweepDisk().catch(() => {}); }, SWEEP_INTERVAL_MS).unref();
 
 // ── Static frontend ──────────────────────────────────────────────────────────
+// Not used on Vercel, where the frontend is its own service. Kept so the
+// single-image Docker build still serves the whole app.
 const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist');
 const hasFrontendBuild = fs.existsSync(path.join(FRONTEND_DIST, 'index.html'));
 
 if (hasFrontendBuild) {
-  // Vite fingerprints asset filenames, so they can be cached hard. index.html
-  // must not be, or a deploy never reaches anyone's browser.
   app.use(
     express.static(FRONTEND_DIST, {
       maxAge: '1y',
@@ -612,8 +664,6 @@ if (hasFrontendBuild) {
 
 app.use('/api/*', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
-// Last-resort handler. It must not echo the error back, because stack traces leak
-// paths and versions.
 app.use((err, req, res, _next) => {
   console.error('[error]', err.message);
   if (res.headersSent) return;
@@ -627,36 +677,10 @@ function formatBytes(bytes) {
   return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
-function primaryLanAddress() {
-  return new Promise((resolve) => {
-    let settled = false;
-    const socket = dgram.createSocket('udp4');
-    const done = (addr) => {
-      if (settled) return;
-      settled = true;
-      try { socket.close(); } catch { /* already closed */ }
-      resolve(addr);
-    };
-    socket.once('error', () => done(null));
-    setTimeout(() => done(null), 1000).unref();
-    try {
-      socket.connect(53, '8.8.8.8', () => {
-        let addr = null;
-        try { addr = socket.address().address; } catch { /* socket died */ }
-        done(addr && addr !== '0.0.0.0' ? addr : null);
-      });
-    } catch {
-      done(null);
-    }
-  });
-}
-
 function checkFfmpeg() {
   return new Promise((resolve) => {
     execFile(FFMPEG_BIN, ['-hide_banner', '-filters'], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
       if (err) return resolve({ ok: false, reason: 'not found' });
-      // No zscale means no libzimg, which means this exact pipeline cannot run.
-      // Far better to say so at boot than to fail every upload at 0%.
       if (!/\bzscale\b/.test(stdout)) return resolve({ ok: false, reason: 'built without libzimg (zscale)' });
       resolve({ ok: true });
     });
@@ -665,46 +689,46 @@ function checkFfmpeg() {
 
 // ── Startup ──────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, HOST, async () => {
-  await sweep().catch(() => {});
+  await sweepDisk().catch(() => {});
 
-  console.log('');
-  console.log(`✅  HDR2SDR running on port ${PORT}`);
-  console.log(`    Local:    http://localhost:${PORT}`);
+  console.log(`HDR2SDR listening on ${HOST}:${PORT}`);
+  console.log(`  Max upload:   ${formatBytes(MAX_UPLOAD_BYTES)}`);
+  console.log(`  Retention:    ${Math.round(JOB_TTL_MS / 60000)} min, then deleted`);
+  console.log(`  Time budget:  ${MAX_DURATION_MS / 1000}s per request, ${SAVE_RESERVE_MS / 1000}s reserved to save`);
+  console.log(`  Encoder:      libx264 crf ${VIDEO_CRF} preset ${VIDEO_PRESET}, ${FFMPEG_THREADS} thread(s)`);
 
-  const lan = await primaryLanAddress();
-  if (lan) console.log(`    Network:  http://${lan}:${PORT}`);
-
-  console.log('');
-  console.log(`    Max upload:   ${formatBytes(MAX_UPLOAD_BYTES)}`);
-  console.log(`    Retention:    ${Math.round(JOB_TTL_MS / 60000)} min, then deleted`);
-  console.log(`    Concurrency:  ${MAX_CONCURRENT_JOBS} encoding, ${MAX_QUEUED_JOBS} queued`);
-  console.log(`    Encoder:      libx264 crf ${VIDEO_CRF} preset ${VIDEO_PRESET}`);
-
+  if (!BLOB_CONFIGURED) {
+    console.log('  ⚠  No Blob store connected (BLOB_STORE_ID / BLOB_READ_WRITE_TOKEN). Uploads will fail.');
+  }
   const ffmpegStatus = await checkFfmpeg();
   if (!ffmpegStatus.ok) {
-    console.log('');
-    console.log(`    ⚠  FFmpeg ${ffmpegStatus.reason}. Conversions will fail.`);
-    console.log('       Install FFmpeg with libzimg, or set FFMPEG_PATH.');
+    console.log(`  ⚠  FFmpeg ${ffmpegStatus.reason}. Conversions will fail.`);
   }
-  if (!hasFrontendBuild) {
-    console.log('');
-    console.log('    ⚠  No frontend build, serving the API only. Run: npm run build');
-  }
-  console.log('');
 });
 
-// Free hosts send SIGTERM on every redeploy and on idle shutdown. Leaving
-// ffmpeg orphaned and user video on disk through that is exactly the failure
-// the privacy promise cannot survive.
+// Vercel sends SIGTERM when it scales an instance in, with 30s to clean up.
+// Everything this instance still holds is deleted before it goes: running
+// encodes, their uploads, and finished results nobody has collected yet.
 for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.on(signal, () => {
+  process.on(signal, async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`\n${signal} received. Stopping jobs and wiping working files.`);
-
+    console.log(`${signal} received. Stopping jobs and deleting working files.`);
     server.close();
-    for (const jobId of [...jobs.keys()]) destroyJob(jobId);
 
-    setTimeout(() => process.exit(0), 1500).unref();
+    const blobs = [...pendingOutputs.keys()];
+    for (const timer of pendingOutputs.values()) clearTimeout(timer);
+    pendingOutputs.clear();
+    for (const job of jobs.values()) {
+      job.controller.abort();
+      if (job.uploadPathname) blobs.push(job.uploadPathname);
+      if (job.outputPathname) blobs.push(job.outputPathname);
+    }
+
+    const forceExit = setTimeout(() => process.exit(0), 20000);
+    forceExit.unref();
+    await Promise.all(blobs.map(safeDelBlob));
+    await fsp.rm(DATA_DIR, { recursive: true, force: true }).catch(() => {});
+    process.exit(0);
   });
 }

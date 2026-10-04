@@ -1,0 +1,7 @@
+node_modules
+.data
+uploads
+outputs
+.env
+.env.*
+*.log
