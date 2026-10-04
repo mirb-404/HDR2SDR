@@ -16,8 +16,8 @@ export default function PrivacyNotice({ config }: Props) {
       body: `Your video goes the moment the conversion ends, whether it worked or not. The result is deleted as soon as you download it, and erased within ${config.retentionMinutes} minutes either way.`,
     },
     {
-      title: 'No account, no cookies, no tracking',
-      body: 'There is no sign up and no analytics. The page loads nothing from any other company, right down to using your own system fonts so nobody else learns you visited.',
+      title: 'No account, no cookies, no profiling',
+      body: 'There is no sign up. The only analytics is an anonymous count of page visits, with no cookies and nothing that identifies you, and it never sees your video or its name. The page loads nothing from any other site, right down to using your own system fonts.',
     },
     {
       title: 'We never even learn the filename',

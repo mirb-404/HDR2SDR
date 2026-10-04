@@ -45,7 +45,7 @@ export default function Footer() {
           <span aria-hidden="true">&middot;</span>
           <span>No cookies</span>
           <span aria-hidden="true">&middot;</span>
-          <span>No tracking</span>
+          <span>Anonymous visit counts only</span>
           <span aria-hidden="true">&middot;</span>
           <span>Your files are deleted automatically</span>
         </div>

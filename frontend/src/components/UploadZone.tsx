@@ -1,33 +1,15 @@
 import { useRef, useState, useEffect } from 'react'
-import { formatBytes, type ServerConfig } from '../siteConfig'
+import { MAX_FILES, type ServerConfig } from '../siteConfig'
 
 interface Props {
-  onFileSelected: (file: File) => void
+  onFilesSelected: (files: File[]) => void
   config: ServerConfig
 }
 
-export default function UploadZone({ onFileSelected, config }: Props) {
+export default function UploadZone({ onFilesSelected, config }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [pageDragging, setPageDragging] = useState(false)
-  const [rejected, setRejected] = useState<string>('')
   const dragDepth = useRef(0)
-
-  const handleFile = (file: File) => {
-    if (!file.type.startsWith('video/')) {
-      setRejected(`${file.name} is not a video file.`)
-      return
-    }
-    // Checked here as well as on the server so a large upload over mobile data
-    // fails in the first second, not after ten minutes.
-    if (file.size > config.maxUploadBytes) {
-      setRejected(
-        `That file is ${formatBytes(file.size)}. The limit is ${config.maxUploadLabel}, so try a shorter clip.`
-      )
-      return
-    }
-    setRejected('')
-    onFileSelected(file)
-  }
 
   // The whole window is the drop target, so there is no small rectangle to aim
   // at. dragenter and dragleave fire for every child element, so a depth
@@ -50,8 +32,8 @@ export default function UploadZone({ onFileSelected, config }: Props) {
       e.preventDefault()
       dragDepth.current = 0
       setPageDragging(false)
-      const file = e.dataTransfer.files?.[0]
-      if (file) handleFile(file)
+      const files = Array.from(e.dataTransfer.files ?? [])
+      if (files.length) onFilesSelected(files)
     }
 
     window.addEventListener('dragenter', onDragEnter)
@@ -72,8 +54,14 @@ export default function UploadZone({ onFileSelected, config }: Props) {
         ref={inputRef}
         type="file"
         accept="video/*"
+        multiple
         className="hidden"
-        onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? [])
+          // Cleared so picking the same file again still fires a change.
+          e.target.value = ''
+          if (files.length) onFilesSelected(files)
+        }}
       />
 
       <button onClick={() => inputRef.current?.click()} className="btn btn-primary btn-hero">
@@ -83,11 +71,11 @@ export default function UploadZone({ onFileSelected, config }: Props) {
           <path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" strokeWidth="2.2"
             strokeLinecap="round"/>
         </svg>
-        Select video
+        Select videos
       </button>
 
       <p className="text-sm mt-4 hidden sm:block" style={{ color: 'var(--text-3)' }}>
-        or drop a video anywhere on this page
+        Up to {MAX_FILES} at once, or drop them anywhere on this page
       </p>
       <p className="text-sm mt-4 sm:hidden" style={{ color: 'var(--text-3)' }}>
         MP4, MKV, MOV and more
@@ -120,16 +108,6 @@ export default function UploadZone({ onFileSelected, config }: Props) {
         ))}
       </div>
 
-      {rejected && (
-        <p
-          className="mt-6 text-sm px-4 py-3 rounded-lg inline-block rise"
-          role="alert"
-          style={{ background: 'var(--bad-tint)', border: '1px solid #fecdca', color: 'var(--bad)' }}
-        >
-          {rejected}
-        </p>
-      )}
-
       {pageDragging && (
         <div className="page-drop">
           <div className="page-drop-inner">
@@ -140,7 +118,7 @@ export default function UploadZone({ onFileSelected, config }: Props) {
               <path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" strokeWidth="2"
                 strokeLinecap="round"/>
             </svg>
-            <p className="text-lg font-bold" style={{ color: 'var(--text)' }}>Drop it anywhere</p>
+            <p className="text-lg font-bold" style={{ color: 'var(--text)' }}>Drop them anywhere</p>
             <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>
               Release to start converting
             </p>

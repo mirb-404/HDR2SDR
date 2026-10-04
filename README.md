@@ -45,8 +45,10 @@ rather than only promised on the page:
 - **The filename never reaches the server.** A job is a random UUID. The file is
   stored under that ID, and your browser puts the real name back on the
   download.
-- **No accounts, no cookies, no analytics, no third party requests.** Even the
-  fonts are your own system fonts, so nobody else learns you visited.
+- **No accounts, no cookies, no third party requests.** Even the fonts are your
+  own system fonts, so nobody else learns you visited. The only analytics is
+  Vercel Web Analytics: an anonymous, cookieless page-view count served from
+  the site's own domain, which never sees your video or its name.
 - **Nothing is logged.** No access log and no addresses on disk. Your IP is held
   in memory only, hashed with a key that is regenerated at every restart, purely
   to stop one person flooding the server.

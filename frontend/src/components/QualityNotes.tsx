@@ -68,7 +68,7 @@ export default function QualityNotes() {
     },
     {
       title: 'Nothing is kept',
-      body: 'Your video is deleted the moment it is converted. No account and no tracking.',
+      body: 'Your video is deleted the moment it is converted. No account and no cookies.',
       color: '#0d9488',
       tint: '#e6f6f4',
       icon: (

@@ -41,3 +41,19 @@ export function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
+
+// ── Picking files ─────────────────────────────────────────────────────────────
+// Each video is converted on its own, one after another, so this caps how long
+// somebody waits rather than anything on the server.
+export const MAX_FILES = 3
+
+/** Why a file cannot be converted, or null if it can. */
+export function checkVideo(file: File, config: ServerConfig): string | null {
+  if (!file.type.startsWith('video/')) return `${file.name} is not a video file.`
+  // Checked here as well as on the server so a large upload over mobile data
+  // fails in the first second, not after ten minutes.
+  if (file.size > config.maxUploadBytes) {
+    return `${file.name} is ${formatBytes(file.size)}. The limit is ${config.maxUploadLabel}, so try a shorter clip.`
+  }
+  return null
+}

@@ -14,7 +14,8 @@
  *      to be deleted via POST /api/discard.
  *
  * Privacy model (this is a promise the code has to keep, not just marketing):
- *   - No database, no accounts, no cookies, no analytics.
+ *   - No database, no accounts, no cookies. The only analytics is Vercel's
+ *     cookieless page-view count on the frontend, which never sees a video.
  *   - The original filename never leaves the browser. Blobs are named by a
  *     random UUID; the browser renames the download itself.
  *   - The upload is deleted from Blob the moment it is on the encoder's disk,

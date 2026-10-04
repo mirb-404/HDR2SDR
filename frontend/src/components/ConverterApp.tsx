@@ -4,14 +4,15 @@ import UploadZone from './UploadZone'
 import OptionsPanel, { type Resolution } from './OptionsPanel'
 import ProgressBar, { type Phase } from './ProgressBar'
 import DownloadCard from './DownloadCard'
+import BatchList from './BatchList'
 import QualityNotes from './QualityNotes'
 import PrivacyNotice from './PrivacyNotice'
 import BeforeAfter from './BeforeAfter'
 import HowItWorks from './HowItWorks'
-import { formatBytes } from '../siteConfig'
+import { formatBytes, MAX_FILES, checkVideo } from '../siteConfig'
 import { useServerConfig } from '../useServerConfig'
 
-type Stage = 'upload' | 'options' | 'converting' | 'done' | 'error'
+type Stage = 'upload' | 'options' | 'working'
 
 interface ProgressState {
   percent: number
@@ -35,6 +36,21 @@ export interface ConvertedFile {
   downloadUrl: string
 }
 
+// ready: picked, not started. queued: uploaded, waiting for the one before it
+// to finish converting.
+type ItemStatus = 'ready' | 'uploading' | 'queued' | 'converting' | 'done' | 'error'
+
+export interface BatchItem {
+  id: string
+  file: File
+  status: ItemStatus
+  uploadPercent: number
+  phase: Phase
+  progress: ProgressState
+  result: ConvertedFile | null
+  error: string
+}
+
 const IDLE_PROGRESS: ProgressState = { percent: 0, fps: 0, speed: '?', currentTime: 0, duration: 0 }
 
 const VIDEO_EXT = /\.(mp4|mkv|mov|m4v|webm|avi|ts|m2ts|mts|mxf|wmv|flv)$/i
@@ -53,6 +69,17 @@ function randomId(): string {
   const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
+
+const newItem = (file: File): BatchItem => ({
+  id: randomId(),
+  file,
+  status: 'ready',
+  uploadPercent: 0,
+  phase: 'fetching',
+  progress: IDLE_PROGRESS,
+  result: null,
+  error: '',
+})
 
 /**
  * Sends the video straight to storage. It never passes through the API: the
@@ -144,69 +171,111 @@ export default function ConverterApp() {
   const config = useServerConfig()
 
   const [stage, setStage] = useState<Stage>('upload')
-  const [file, setFile] = useState<File | null>(null)
-  const [result, setResult] = useState<ConvertedFile | null>(null)
-  const [progress, setProgress] = useState<ProgressState>(IDLE_PROGRESS)
-  const [phase, setPhase] = useState<Phase>('fetching')
-  const [error, setError] = useState<string>('')
-  const [uploading, setUploading] = useState(false)
-  const [uploadPercent, setUploadPercent] = useState(0)
+  const [items, setItems] = useState<BatchItem[]>([])
+  // Why a picked file was left out. Shown until the next pick.
+  const [notice, setNotice] = useState('')
   // Kept across "convert another", since it is a preference rather than part
   // of one job.
   const [resolution, setResolution] = useState<Resolution>('original')
+  const addInputRef = useRef<HTMLInputElement>(null)
 
-  // One controller covers the upload and the conversion. Aborting it closes
-  // the request, which is the server's signal to kill FFmpeg and delete.
+  // One controller covers every upload and conversion in the batch. Aborting it
+  // closes the requests, which is the server's signal to kill FFmpeg and delete.
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     return () => abortRef.current?.abort()
   }, [])
 
-  const handleFileSelected = (f: File) => {
-    setFile(f)
-    setError('')
-    setStage('options')
+  const update = (id: string, patch: Partial<BatchItem>) =>
+    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
+
+  const addFiles = (incoming: File[]) => {
+    const notes: string[] = []
+    const accepted: File[] = []
+    let overflow = 0
+    for (const f of incoming) {
+      const problem = checkVideo(f, config)
+      if (problem) notes.push(problem)
+      else if (items.length + accepted.length < MAX_FILES) accepted.push(f)
+      else overflow++
+    }
+    if (overflow) {
+      notes.push(`You can convert up to ${MAX_FILES} videos at a time, so ${overflow} ${overflow === 1 ? 'was' : 'were'} left out.`)
+    }
+    setNotice(notes.join(' '))
+    if (accepted.length) {
+      setItems((prev) => [...prev, ...accepted.map(newItem)])
+      setStage('options')
+    }
+  }
+
+  const removeItem = (id: string) => {
+    const left = items.filter((it) => it.id !== id)
+    setItems(left)
+    setNotice('')
+    if (left.length === 0) setStage('upload')
   }
 
   const handleConvert = async () => {
-    if (!file) return
+    const batch = items
+    if (batch.length === 0) return
 
     const controller = new AbortController()
     abortRef.current = controller
-    setUploading(true)
-    setUploadPercent(0)
-    setError('')
+    const { signal } = controller
+    setStage('working')
+    setNotice('')
 
-    try {
-      const pathname = await uploadVideo(file, setUploadPercent, controller.signal)
+    // A reset or unmount aborted the run on purpose; there is nothing to report.
+    const fail = (id: string, e: unknown) => {
+      if (!signal.aborted) update(id, { status: 'error', error: (e as Error).message })
+    }
 
-      setUploading(false)
-      setStage('converting')
-      setPhase('fetching')
-      setProgress(IDLE_PROGRESS)
+    const convertOne = async (item: BatchItem, pathname: string) => {
+      if (signal.aborted) return
+      update(item.id, { status: 'converting', phase: 'fetching', progress: IDLE_PROGRESS })
+      try {
+        const result = await convertVideo(pathname, resolution, (event) => {
+          if (event.waiting) return update(item.id, { phase: 'waiting' })
+          if (event.stage) return update(item.id, { phase: event.stage })
+          update(item.id, {
+            phase: 'encoding',
+            progress: {
+              percent: event.percent ?? 0,
+              fps: event.fps ?? 0,
+              speed: event.speed ?? '?',
+              currentTime: event.currentTime ?? 0,
+              duration: event.duration ?? 0,
+            },
+          })
+        }, signal)
+        update(item.id, { status: 'done', result })
+      } catch (e) {
+        fail(item.id, e)
+      }
+    }
 
-      const converted = await convertVideo(pathname, resolution, (event) => {
-        if (event.waiting) return setPhase('waiting')
-        if (event.stage) return setPhase(event.stage)
-        setPhase('encoding')
-        setProgress({
-          percent: event.percent ?? 0,
-          fps: event.fps ?? 0,
-          speed: event.speed ?? '?',
-          currentTime: event.currentTime ?? 0,
-          duration: event.duration ?? 0,
-        })
-      }, controller.signal)
-
-      setResult(converted)
-      setStage('done')
-    } catch (e) {
-      // A reset or unmount aborted this run on purpose; there is nothing to report.
-      if (controller.signal.aborted) return
-      setError((e as Error).message)
-      setStage('error')
-      setUploading(false)
+    // Uploads and conversions overlap: the next video uploads while the current
+    // one converts. Conversions run one at a time, since each instance has one
+    // encoder. Only one upload is ever left waiting, because the server sweeps
+    // any upload older than the retention window, and a third video uploaded up
+    // front could be gone before its turn came.
+    const conversions: Promise<void>[] = []
+    for (let i = 0; i < batch.length; i++) {
+      if (i >= 2) await conversions[i - 2]
+      if (signal.aborted) return
+      const item = batch[i]
+      const before = conversions[i - 1] ?? Promise.resolve()
+      update(item.id, { status: 'uploading', uploadPercent: 0 })
+      try {
+        const pathname = await uploadVideo(item.file, (p) => update(item.id, { uploadPercent: p }), signal)
+        update(item.id, { status: 'queued' })
+        conversions[i] = before.then(() => convertOne(item, pathname))
+      } catch (e) {
+        fail(item.id, e)
+        conversions[i] = before
+      }
     }
   }
 
@@ -214,16 +283,28 @@ export default function ConverterApp() {
     abortRef.current?.abort()
     abortRef.current = null
     setStage('upload')
-    setFile(null)
-    setResult(null)
-    setProgress(IDLE_PROGRESS)
-    setPhase('fetching')
-    setError('')
-    setUploading(false)
-    setUploadPercent(0)
+    setItems([])
+    setNotice('')
   }
 
   const idle = stage === 'upload'
+  const working = stage === 'working'
+  const single = items.length === 1 ? items[0] : null
+  const allFinished = items.length > 0 && items.every((i) => i.status === 'done' || i.status === 'error')
+  // A single video keeps the options card on screen while it uploads, as before.
+  const showOptions = stage === 'options' ||
+    (working && single !== null && (single.status === 'ready' || single.status === 'uploading'))
+  const uploadingSingle = single?.status === 'uploading' ? single.uploadPercent : null
+
+  const noticeBox = notice && (
+    <p
+      className="mt-6 text-sm px-4 py-3 rounded-lg inline-block rise text-left"
+      role="alert"
+      style={{ background: 'var(--bad-tint)', border: '1px solid #fecdca', color: 'var(--bad)' }}
+    >
+      {notice}
+    </p>
+  )
 
   return (
     <>
@@ -250,82 +331,117 @@ export default function ConverterApp() {
           </p>
 
           <div className="mt-9">
-            {idle && <UploadZone onFileSelected={handleFileSelected} config={config} />}
+            {idle && <UploadZone onFilesSelected={addFiles} config={config} />}
+            {idle && noticeBox}
           </div>
         </div>
 
         {/* Working panel, shown once a file is in hand. */}
         {!idle && (
           <div className="max-w-xl mx-auto card p-5 sm:p-7 rise">
-            {stage === 'options' && file && (
+            {showOptions && (
               <div>
-                <div className="flex items-center gap-3.5 pb-5 mb-5" style={{ borderBottom: '1px solid var(--border)' }}>
-                  <span
-                    className="inline-flex items-center justify-center w-11 h-11 rounded-[10px] flex-shrink-0"
-                    style={{ background: 'var(--brand-tint)', color: 'var(--brand)' }}
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path d="M15 10l4.5-2.5v9L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      <rect x="3" y="6" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/>
-                    </svg>
-                  </span>
-                  <div className="flex-1 min-w-0 text-left">
-                    <p className="font-semibold text-sm truncate" style={{ color: 'var(--text)' }}>
-                      {file.name}
-                    </p>
-                    <p className="text-[13px] mt-0.5" style={{ color: 'var(--text-3)' }}>
-                      {formatBytes(file.size)}
-                    </p>
+                <ul className="pb-5 mb-5 space-y-3.5" style={{ borderBottom: '1px solid var(--border)' }}>
+                  {items.map((item) => (
+                    <li key={item.id} className="flex items-center gap-3.5">
+                      <span
+                        className="inline-flex items-center justify-center w-11 h-11 rounded-[10px] shrink-0"
+                        style={{ background: 'var(--brand-tint)', color: 'var(--brand)' }}
+                      >
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M15 10l4.5-2.5v9L15 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <rect x="3" y="6" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2"/>
+                        </svg>
+                      </span>
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="font-semibold text-sm truncate" style={{ color: 'var(--text)' }}>
+                          {item.file.name}
+                        </p>
+                        <p className="text-[13px] mt-0.5" style={{ color: 'var(--text-3)' }}>
+                          {formatBytes(item.file.size)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => removeItem(item.id)}
+                        disabled={working}
+                        className="text-[13px] font-medium px-3 py-2 rounded-lg shrink-0 transition-colors"
+                        style={{ color: 'var(--text-3)' }}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+
+                {!working && items.length < MAX_FILES && (
+                  <div className="-mt-1 mb-5">
+                    <input
+                      ref={addInputRef}
+                      type="file"
+                      accept="video/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files ?? [])
+                        e.target.value = ''
+                        if (files.length) addFiles(files)
+                      }}
+                    />
+                    <button
+                      onClick={() => addInputRef.current?.click()}
+                      className="text-[13px] font-semibold"
+                      style={{ color: 'var(--brand)' }}
+                    >
+                      + Add another video ({items.length} of {MAX_FILES})
+                    </button>
                   </div>
-                  <button
-                    onClick={reset}
-                    disabled={uploading}
-                    className="text-[13px] font-medium px-3 py-2 rounded-lg flex-shrink-0 transition-colors"
-                    style={{ color: 'var(--text-3)' }}
-                  >
-                    Remove
-                  </button>
-                </div>
+                )}
+                {noticeBox && <div className="-mt-6 mb-5">{noticeBox}</div>}
 
                 <OptionsPanel
-                  inputName={file.name}
+                  inputName={items[0]?.file.name ?? ''}
                   config={config}
                   resolution={resolution}
                   onResolutionChange={setResolution}
-                  disabled={uploading}
+                  disabled={working}
                 />
 
-                {uploading && (
+                {uploadingSingle !== null && (
                   <div className="mt-6">
                     <div className="flex items-baseline justify-between mb-2">
                       <span className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>Uploading</span>
-                      <span className="text-sm font-bold mono" style={{ color: 'var(--brand)' }}>{uploadPercent}%</span>
+                      <span className="text-sm font-bold mono" style={{ color: 'var(--brand)' }}>{uploadingSingle}%</span>
                     </div>
                     <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${uploadPercent}%` }} />
+                      <div className="progress-fill" style={{ width: `${uploadingSingle}%` }} />
                     </div>
                   </div>
                 )}
 
                 <button
                   onClick={handleConvert}
-                  disabled={uploading}
+                  disabled={working}
                   className="btn btn-primary w-full mt-6 text-base"
                   style={{ minHeight: '54px' }}
                   id="convert-btn"
                 >
-                  {uploading ? `Uploading ${uploadPercent}%` : 'Convert to SDR'}
+                  {uploadingSingle !== null
+                    ? `Uploading ${uploadingSingle}%`
+                    : items.length > 1 ? `Convert ${items.length} videos to SDR` : 'Convert to SDR'}
                 </button>
               </div>
             )}
 
-            {stage === 'converting' && <ProgressBar {...progress} phase={phase} />}
+            {/* One video keeps the full-size progress, result and error views. */}
+            {working && single && (single.status === 'queued' || single.status === 'converting') && (
+              <ProgressBar {...single.progress} phase={single.status === 'queued' ? 'fetching' : single.phase} />
+            )}
 
-            {stage === 'done' && result && (
+            {working && single?.status === 'done' && single.result && (
               <div>
                 <DownloadCard
-                  file={result}
-                  originalName={file?.name ?? 'video.mp4'}
+                  file={single.result}
+                  originalName={single.file.name}
                   retentionMinutes={config.retentionMinutes}
                   downscaled={resolution === '1080p'}
                 />
@@ -335,7 +451,7 @@ export default function ConverterApp() {
               </div>
             )}
 
-            {stage === 'error' && (
+            {working && single?.status === 'error' && (
               <div className="text-center py-3">
                 <span
                   className="inline-flex items-center justify-center w-12 h-12 rounded-full mb-4"
@@ -348,7 +464,7 @@ export default function ConverterApp() {
                 </span>
                 <p className="text-lg font-bold" style={{ color: 'var(--text)' }}>That did not work</p>
                 <p className="text-sm mt-2 leading-relaxed break-words" style={{ color: 'var(--text-2)' }}>
-                  {error}
+                  {single.error}
                 </p>
                 <p className="text-[13px] mt-3" style={{ color: 'var(--text-3)' }}>
                   Whatever went wrong, your video has already been deleted from the server.
@@ -356,6 +472,18 @@ export default function ConverterApp() {
                 <button onClick={reset} className="btn btn-secondary w-full mt-6">
                   Try again
                 </button>
+              </div>
+            )}
+
+            {/* Two or three videos share one list. */}
+            {working && items.length > 1 && (
+              <div>
+                <BatchList items={items} retentionMinutes={config.retentionMinutes} />
+                {allFinished && (
+                  <button onClick={reset} className="btn btn-secondary w-full mt-5" id="convert-another-btn">
+                    Convert more videos
+                  </button>
+                )}
               </div>
             )}
           </div>
