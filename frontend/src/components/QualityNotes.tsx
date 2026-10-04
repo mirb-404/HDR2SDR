@@ -7,7 +7,7 @@ export default function QualityNotes() {
   const points = [
     {
       title: 'Same size and sharpness',
-      body: 'No shrinking, no cropping and no watermark. A 4K clip comes back as 4K.',
+      body: 'No cropping and no watermark. A 4K clip comes back as 4K, unless you choose 1080p for a faster result.',
       color: '#f5541d',
       tint: '#fff1ec',
       icon: (

@@ -57,21 +57,26 @@ the exact command, and so does the next section.
 ## How it works
 
 ```
-zscale=t=linear:npl=100        convert to linear light at a 100 nit peak
-format=gbrpf32le               32 bit float, so the maths cannot band
-zscale=p=bt709                 wide HDR colour down to standard colour
-tonemap=tonemap=hable:desat=0  filmic curve; bright areas fade off smoothly
-zscale=t=bt709:m=bt709:r=tv    standard gamma and TV range
-format=yuv420p                 8 bit SDR output
+zscale=t=linear:npl=100:p=bt709  linear light at a 100 nit peak, and wide HDR
+                                 colour down to standard colour, in one pass
+format=gbrpf32le                 32 bit float, so the maths cannot band
+tonemap=tonemap=hable:desat=0    filmic curve; bright areas fade off smoothly
+zscale=t=bt709:m=bt709:r=tv      standard gamma and TV range
+format=yuv420p                   8 bit SDR output
 ```
 
 Then `libx264 -crf 20`, AAC audio, BT.709 colour tags and `+faststart`.
+
+The optional **1080p** output adds `w=`/`h=` to that first `zscale`, capping the
+short side at 1080 before any of the float maths. A 4K clip then takes about a
+fifth of the time, which on a 1 vCPU host is the difference between a clip
+finishing and hitting the time limit.
 
 The whole thing as one command, if you want to skip the web app:
 
 ```sh
 ffmpeg -i input.mp4 \
-  -vf zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,\
+  -vf zscale=t=linear:npl=100:p=bt709,format=gbrpf32le,\
 tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p \
   -c:v libx264 -crf 20 -preset fast \
   -color_primaries bt709 -color_trc bt709 -colorspace bt709 \

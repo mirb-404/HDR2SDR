@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { uploadPresigned } from '@vercel/blob/client'
 import UploadZone from './UploadZone'
-import OptionsPanel from './OptionsPanel'
+import OptionsPanel, { type Resolution } from './OptionsPanel'
 import ProgressBar, { type Phase } from './ProgressBar'
 import DownloadCard from './DownloadCard'
 import QualityNotes from './QualityNotes'
@@ -93,6 +93,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
  */
 async function convertVideo(
   pathname: string,
+  resolution: Resolution,
   onEvent: (e: ConvertEvent) => void,
   signal: AbortSignal
 ): Promise<ConvertedFile> {
@@ -100,7 +101,7 @@ async function convertVideo(
     const res = await fetch('/api/convert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pathname }),
+      body: JSON.stringify({ pathname, resolution }),
       signal,
     })
 
@@ -148,6 +149,9 @@ export default function ConverterApp() {
   const [error, setError] = useState<string>('')
   const [uploading, setUploading] = useState(false)
   const [uploadPercent, setUploadPercent] = useState(0)
+  // Kept across "convert another", since it is a preference rather than part
+  // of one job.
+  const [resolution, setResolution] = useState<Resolution>('original')
 
   // One controller covers the upload and the conversion. Aborting it closes
   // the request, which is the server's signal to kill FFmpeg and delete.
@@ -180,7 +184,7 @@ export default function ConverterApp() {
       setPhase('fetching')
       setProgress(IDLE_PROGRESS)
 
-      const converted = await convertVideo(pathname, (event) => {
+      const converted = await convertVideo(pathname, resolution, (event) => {
         if (event.waiting) return setPhase('waiting')
         if (event.stage) return setPhase(event.stage)
         setPhase('encoding')
@@ -281,7 +285,13 @@ export default function ConverterApp() {
                   </button>
                 </div>
 
-                <OptionsPanel inputName={file.name} config={config} />
+                <OptionsPanel
+                  inputName={file.name}
+                  config={config}
+                  resolution={resolution}
+                  onResolutionChange={setResolution}
+                  disabled={uploading}
+                />
 
                 {uploading && (
                   <div className="mt-6">
@@ -315,6 +325,7 @@ export default function ConverterApp() {
                   file={result}
                   originalName={file?.name ?? 'video.mp4'}
                   retentionMinutes={config.retentionMinutes}
+                  downscaled={resolution === '1080p'}
                 />
                 <button onClick={reset} className="btn btn-secondary w-full mt-5" id="convert-another-btn">
                   Convert another video

@@ -5,9 +5,10 @@ interface Props {
   file: ConvertedFile
   originalName: string
   retentionMinutes: number
+  downscaled: boolean
 }
 
-export default function DownloadCard({ file, originalName, retentionMinutes }: Props) {
+export default function DownloadCard({ file, originalName, retentionMinutes, downscaled }: Props) {
   const [downloading, setDownloading] = useState(false)
   const [failed, setFailed] = useState('')
   const [collected, setCollected] = useState(false)
@@ -72,7 +73,9 @@ export default function DownloadCard({ file, originalName, retentionMinutes }: P
         Your video is ready
       </h2>
       <p className="text-sm mt-2 mb-6" style={{ color: 'var(--text-2)' }}>
-        Same size and sharpness, sound kept, and it plays anywhere.
+        {downscaled
+          ? 'Now at 1080p, sound kept, and it plays anywhere.'
+          : 'Same size and sharpness, sound kept, and it plays anywhere.'}
       </p>
 
       <button

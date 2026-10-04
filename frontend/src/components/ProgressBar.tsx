@@ -17,11 +17,14 @@ const TITLES: Record<Phase, string> = {
 }
 
 function formatDuration(secs: number) {
-  if (secs < 60) return 'less than a minute'
+  // Seconds are rounded up to the next 10 so the figure does not flicker on
+  // every progress line, and never reads 0 while work is left.
+  if (secs < 60) return `About ${Math.max(10, Math.ceil(secs / 10) * 10)} seconds left`
+  if (secs < 120) return 'About 1 minute left'
   const mins = Math.round(secs / 60)
-  if (mins < 60) return `about ${mins} minute${mins === 1 ? '' : 's'}`
+  if (mins < 60) return `About ${mins} minutes left`
   const hours = Math.floor(mins / 60)
-  return `about ${hours}h ${mins % 60}m`
+  return `About ${hours}h ${mins % 60}m left`
 }
 
 // Time remaining from the encoder's own speed figure. Shown only once there is
@@ -51,6 +54,10 @@ export default function ProgressBar({ percent, speed, currentTime, duration, pha
   }
 
   const remaining = phase === 'encoding' ? estimateRemaining(currentTime, duration, speed) : null
+  const status =
+    phase === 'encoding' ? remaining ?? 'Estimating time left' :
+    phase === 'saving' ? 'Almost done' :
+    'Starting up'
 
   return (
     <div className="py-6 rise">
@@ -70,9 +77,19 @@ export default function ProgressBar({ percent, speed, currentTime, duration, pha
         <div className="progress-fill" style={{ width: `${percent}%` }} />
       </div>
 
+      <div className="flex items-baseline justify-between gap-3 mt-3">
+        <span className="text-[15px] font-semibold" style={{ color: 'var(--text)' }} aria-live="polite">
+          {status}
+        </span>
+        {phase === 'encoding' && parseFloat(speed) > 0 && (
+          <span className="text-[13px] mono" style={{ color: 'var(--text-3)' }}>
+            {parseFloat(speed).toFixed(2)}x speed
+          </span>
+        )}
+      </div>
+
       <p className="text-sm mt-4" style={{ color: 'var(--text-2)' }}>
-        {remaining ? `${remaining} left. ` : ''}Keep this tab open. Your video is
-        erased the moment this finishes.
+        Keep this tab open. Your video is erased the moment this finishes.
       </p>
     </div>
   )
