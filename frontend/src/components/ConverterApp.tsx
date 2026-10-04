@@ -10,6 +10,7 @@ import PrivacyNotice from './PrivacyNotice'
 import BeforeAfter from './BeforeAfter'
 import HowItWorks from './HowItWorks'
 import { formatBytes, MAX_FILES, checkVideo } from '../siteConfig'
+import { probeHdr } from '../hdrProbe'
 import { useServerConfig } from '../useServerConfig'
 
 type Stage = 'upload' | 'options' | 'working'
@@ -190,16 +191,22 @@ export default function ConverterApp() {
   const update = (id: string, patch: Partial<BatchItem>) =>
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
 
-  const addFiles = (incoming: File[]) => {
+  const addFiles = async (incoming: File[]) => {
     const notes: string[] = []
     const accepted: File[] = []
     let overflow = 0
-    for (const f of incoming) {
+    // Reads only each file's colour tags, so this is quick even for 3 large
+    // files. Only a clear SDR verdict stops one; the server checks the rest.
+    const verdicts = await Promise.all(incoming.map((f) => (checkVideo(f, config) ? null : probeHdr(f))))
+    incoming.forEach((f, i) => {
       const problem = checkVideo(f, config)
       if (problem) notes.push(problem)
+      else if (verdicts[i] === 'sdr') {
+        notes.push(`${f.name} is not HDR, so there is nothing to convert. It should already look right on any screen.`)
+      }
       else if (items.length + accepted.length < MAX_FILES) accepted.push(f)
       else overflow++
-    }
+    })
     if (overflow) {
       notes.push(`You can convert up to ${MAX_FILES} videos at a time, so ${overflow} ${overflow === 1 ? 'was' : 'were'} left out.`)
     }

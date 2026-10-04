@@ -69,6 +69,7 @@ const VIDEO_CRF = String(num('VIDEO_CRF', 20));
 const VIDEO_PRESET = process.env.VIDEO_PRESET || 'fast';
 const AUDIO_BITRATE = process.env.AUDIO_BITRATE || '192k';
 const FFMPEG_BIN = process.env.FFMPEG_PATH || 'ffmpeg';
+const FFPROBE_BIN = process.env.FFPROBE_PATH || 'ffprobe';
 const FFMPEG_THREADS = String(num('FFMPEG_THREADS', allottedCpus()));
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '.data');
@@ -342,6 +343,8 @@ app.post('/api/convert', rateLimit(API_LIMIT, 'api'), async (req, res) => {
     await safeDelBlob(pathname);
     job.uploadPathname = null;
 
+    await assertHdr(job.inputPath, controller.signal);
+
     const deadline = startedAt + MAX_DURATION_MS - SAVE_RESERVE_MS;
     await encode(job, deadline, send);
     await safeUnlink(job.inputPath);
@@ -402,6 +405,41 @@ async function fetchUpload(pathname, dest, signal) {
     throw new UserError(`That file is larger than the ${formatBytes(MAX_UPLOAD_BYTES)} limit.`);
   }
   await pipeline(Readable.fromWeb(result.stream), fs.createWriteStream(dest), { signal });
+}
+
+// PQ (HDR10, HDR10+, most Dolby Vision) and HLG (phones, broadcast).
+const HDR_TRANSFERS = ['smpte2084', 'arib-std-b67'];
+
+/**
+ * Refuses an SDR video before it costs any encoding time. The browser checks
+ * the container's colour tags before uploading, but it lets through anything
+ * it cannot read; ffprobe also reads the tags inside the video stream itself,
+ * so this is the check that decides. If ffprobe itself fails, the file is let
+ * through and FFmpeg reports whatever is wrong with it.
+ */
+function assertHdr(file, signal) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      FFPROBE_BIN,
+      ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=color_transfer', '-of', 'csv=p=0', file],
+      { timeout: 30000, signal },
+      (err, stdout) => {
+        if (signal.aborted) return reject(new UserError('Cancelled.'));
+        if (err) {
+          console.error('[ffprobe]', err.code === 'ENOENT' ? 'binary not found' : err.message);
+          return resolve();
+        }
+        // MPEG-TS repeats the stream under its program section, so only the
+        // first value counts.
+        const transfer = stdout.split(/\s+/).find(Boolean) ?? '';
+        if (!transfer) return reject(new UserError('That file could not be read as a video. It may be corrupt or incomplete.'));
+        if (!HDR_TRANSFERS.includes(transfer)) {
+          return reject(new UserError('This video is not HDR, so there is nothing to convert. It should already look right on any screen.'));
+        }
+        resolve();
+      }
+    );
+  });
 }
 
 function encode(job, deadline, send) {
