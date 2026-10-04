@@ -68,8 +68,10 @@ async function uploadVideo(file: File, onProgress: (percent: number) => void, si
       handleUploadUrl: '/api/upload-url',
       contentType: file.type.startsWith('video/') ? file.type : 'application/octet-stream',
       // Parts upload in parallel and retry on their own, which matters on a
-      // phone connection that drops for a second halfway through.
-      multipart: file.size > 32 * 1024 * 1024,
+      // phone connection that drops for a second halfway through. The SDK
+      // sends 8 MB parts six at a time, so anything over two parts is faster
+      // this way than as one long request on a single connection.
+      multipart: file.size > 16 * 1024 * 1024,
       abortSignal: signal,
       onUploadProgress: (e) => onProgress(Math.round(e.percentage)),
     })
